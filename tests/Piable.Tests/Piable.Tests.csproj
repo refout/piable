@@ -5,6 +5,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+
+    <!-- 必须与 Piable.csproj 保持一致：该开关写在运行宿主的 runtimeconfig.json 中，
+         测试宿主是 testhost.exe 而非 Piable.exe，不在此处声明就不会生效，
+         测试也就无法覆盖生产环境真实的序列化约束。 -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
 
   <ItemGroup>
