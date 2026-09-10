@@ -36,6 +36,9 @@ public sealed class UserPreferences
     /// <summary>工具调用循环的最大轮数，防止无限循环。</summary>
     public int MaxToolRounds { get; set; } = 5;
 
-    /// <summary>单次请求的超时时间（秒）。</summary>
-    public int RequestTimeoutSeconds { get; set; } = 120;
+    /// <summary>
+    /// 单次生成的超时时间（秒）。这是整个流式请求的总时长上限，
+    /// 不是空闲检测——因此默认给得比较宽，避免长回答被中途掐断。
+    /// </summary>
+    public int RequestTimeoutSeconds { get; set; } = 300;
 }
