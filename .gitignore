@@ -1,0 +1,39 @@
+## .NET / build 产物
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+publish/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Rider / Visual Studio / VS Code
+.idea/
+.vs/
+.vscode/
+*.DotSettings.user
+
+## 本地数据库与备份（含用户密钥，绝不入库）
+*.db
+*.db-wal
+*.db-shm
+*.backup.db
+*.key
+
+## 测试与覆盖率
+[Tt]est[Rr]esult*/
+coverage*.json
+coverage*.xml
+*.coverage
+*.trx
+
+## 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+## NuGet
+*.nupkg
+packages/
