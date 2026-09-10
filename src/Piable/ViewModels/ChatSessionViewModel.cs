@@ -35,19 +35,26 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
     [NotifyCanExecuteChangedFor(nameof(StopCommand))]
     private bool _isGenerating;
 
+    /// <summary>当前会话使用的智能体。改动会即时生效于下一轮生成。</summary>
     [ObservableProperty]
-    private bool _isParameterPanelExpanded;
-
-    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AgentButtonText))]
+    [NotifyPropertyChangedFor(nameof(AgentDescription))]
+    [NotifyPropertyChangedFor(nameof(HasAgentDescription))]
     private Agent? _selectedAgent;
 
+    // 以下三个是本次会话内的临时覆盖，不写回智能体配置；
+    // 切换智能体时会重新取该智能体的默认值。
+
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ParameterSummary))]
     private double _temperature = 0.7;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ParameterSummary))]
     private int _maxTokens = 2048;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ParameterSummary))]
     private double _topP = 1.0;
 
     public ChatSessionViewModel(
@@ -95,7 +102,31 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
 
     public string Title => Session.Title;
 
-    /// <summary>标题栏统计：<c>💬 12条 · 🔢 2.3K · ⏱ 8.7s · 🤖 通用助手</c>。</summary>
+    /// <summary>右上角按钮上的文字：<c>🤖 代码助手</c>。</summary>
+    public string AgentButtonText =>
+        SelectedAgent is null ? "🤖 未选择智能体" : $"🤖 {SelectedAgent.Name}";
+
+    /// <summary>智能体的描述，显示在选择面板里。</summary>
+    public string? AgentDescription => SelectedAgent?.Description;
+
+    public bool HasAgentDescription => !string.IsNullOrWhiteSpace(SelectedAgent?.Description);
+
+    /// <summary>参数摘要，作为按钮的悬停提示，不必展开面板就能看到当前取值。</summary>
+    public string ParameterSummary =>
+        $"Temperature {Temperature:0.##}  ·  Top P {TopP:0.##}  ·  Max Tokens {MaxTokens}";
+
+    /// <summary>放弃本次会话的参数改动，重新取智能体（或供应商）的默认值。</summary>
+    [RelayCommand]
+    private void ResetParameters()
+    {
+        ApplyParameterDefaults();
+        OnPropertyChanged(nameof(ParameterSummary));
+    }
+
+    /// <summary>
+    /// 标题栏统计：<c>💬 12条 · 🔢 2.3K · ⏱ 8.7s</c>。
+    /// 不含智能体名——右上角的按钮已经显示它了，重复既冗余又占用本就紧张的标题栏宽度。
+    /// </summary>
     public string HeaderStatistics
     {
         get
@@ -103,10 +134,9 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
             var messages = Items.OfType<MessageViewModel>().ToList();
             var tokens = messages.Sum(m => (long)(m.TotalTokens ?? 0));
             var duration = messages.Sum(m => m.DurationMs ?? 0);
-            var agent = SelectedAgent?.Name ?? "未选择智能体";
 
             return $"💬 {messages.Count}条 · 🔢 {_calculator.FormatTokens(tokens)}"
-                   + $" · ⏱ {_calculator.FormatDuration(duration)} · 🤖 {agent}";
+                   + $" · ⏱ {_calculator.FormatDuration(duration)}";
         }
     }
 

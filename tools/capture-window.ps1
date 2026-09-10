@@ -34,7 +34,12 @@ $procs = Get-Process -Name Piable -ErrorAction SilentlyContinue
 if (-not $procs) { Write-Output "NO_PIABLE_PROCESS"; exit 1 }
 $ids = @($procs | ForEach-Object { $_.Id })
 
-$script:handle = [IntPtr]::Zero
+# 取该进程中面积最大的可见窗口，而不是第一个。
+# Avalonia 会额外创建一些不可见或很小的辅助窗口，取"第一个"很容易挑错，
+# 截出来的区域跟着偏，看起来就像界面缺了一块。
+$script:best = [IntPtr]::Zero
+$script:bestArea = 0
+$script:found = @()
 $cb = [Win+EnumProc] {
     param($h, $l)
     $owner = 0
@@ -42,13 +47,21 @@ $cb = [Win+EnumProc] {
     if ($ids -contains $owner -and [Win]::IsWindowVisible($h)) {
         $sb = New-Object System.Text.StringBuilder 512
         [Win]::GetWindowText($h, $sb, 512) | Out-Null
-        if ($sb.Length -gt 0 -and $script:handle -eq [IntPtr]::Zero) {
-            $script:handle = $h
+        $rect = New-Object Win+RECT
+        [Win]::GetWindowRect($h, [ref]$rect) | Out-Null
+        $area = ($rect.R - $rect.L) * ($rect.B - $rect.T)
+        $script:found += "'$($sb.ToString())' $($rect.R - $rect.L)x$($rect.B - $rect.T)"
+        if ($area -gt $script:bestArea) {
+            $script:bestArea = $area
+            $script:best = $h
         }
     }
     return $true
 }
 [Win]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null
+
+Write-Output "候选窗口: $($script:found -join ' | ')"
+$script:handle = $script:best
 
 if ($script:handle -eq [IntPtr]::Zero) { Write-Output "NO_VISIBLE_WINDOW"; exit 1 }
 

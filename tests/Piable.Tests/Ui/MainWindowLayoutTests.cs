@@ -93,6 +93,119 @@ public class MainWindowLayoutTests
     }
 
     [AvaloniaFact]
+    public async Task 智能体按钮渲染在界面右上角()
+    {
+        var (window, _, workspace) = await CreateWindowAsync();
+        await using var _ = workspace;
+
+        var button = Find<Button>(window, b => b.Name == "AgentButton");
+
+        Assert.True(button.IsEffectivelyVisible, "智能体按钮应当可见");
+
+        // 宽度必须大于零：被挤成零宽的按钮同样"可见"，而且右边缘也"没超界"，
+        // 不加这条断言的话，按钮被挤出布局也测不出来。
+        Assert.True(button.Bounds.Width > 0,
+            $"智能体按钮宽度为 {button.Bounds.Width}，说明它被挤出了布局");
+
+        // 按钮上要显示当前智能体的名称，而不是一个无字的图标
+        var texts = button.GetVisualDescendants().OfType<TextBlock>()
+            .Select(t => t.Text)
+            .ToList();
+        Assert.Contains(texts, t => t is not null && t.Contains("通用助手"));
+
+        var topLeft = button.TranslatePoint(new Point(0, 0), window);
+        Assert.NotNull(topLeft);
+
+        // 贴右上角：纵向落在顶部区域，横向落在右半侧
+        Assert.True(topLeft!.Value.Y < WindowHeight / 4,
+            $"按钮纵坐标 {topLeft.Value.Y} 应贴近顶部");
+        Assert.True(topLeft.Value.X > WindowWidth / 2,
+            $"按钮横坐标 {topLeft.Value.X} 应位于右半侧");
+
+        // 且必须完整落在窗口内。右上角的元素最容易被挤出右边界，
+        // 一旦越界用户就点不到它，而这类问题在截图上未必看得出来。
+        var right = topLeft.Value.X + button.Bounds.Width;
+        Assert.True(right <= WindowWidth,
+            $"按钮右边缘 {right} 超出了窗口宽度 {WindowWidth}");
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public async Task 窗口收窄到最小宽度时智能体按钮仍完整可见()
+    {
+        var (window, _, workspace) = await CreateWindowAsync();
+        await using var _ = workspace;
+
+        // 最坏情况：窗口收到最小宽度。右上角的元素一旦被挤出右边界，
+        // 用户就完全点不到它，而这类问题在只测默认尺寸时发现不了。
+        window.Width = window.MinWidth;
+        window.Height = window.MinHeight;
+        window.UpdateLayout();
+
+        var button = Find<Button>(window, b => b.Name == "AgentButton");
+        Assert.True(button.IsEffectivelyVisible);
+        Assert.True(button.Bounds.Width > 0, "按钮不能塌成零宽");
+
+        var topLeft = button.TranslatePoint(new Point(0, 0), window);
+        Assert.NotNull(topLeft);
+
+        var right = topLeft!.Value.X + button.Bounds.Width;
+        Assert.True(right <= window.ClientSize.Width + 0.5,
+            $"按钮右边缘 {right} 超出了客户区宽度 {window.ClientSize.Width}");
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public async Task 输入区不再内联显示智能体选择与参数面板()
+    {
+        var (window, _, workspace) = await CreateWindowAsync();
+        await using var _ = workspace;
+
+        // 参数入口已收进右上角的按钮，未展开时界面上不该有滑块
+        Assert.False(HasVisibleDescendant<Slider>(window),
+            "参数滑块不应在未打开面板时就出现在界面上");
+
+        // 输入区里也不该再有智能体下拉——它现在只存在于下拉面板中
+        var inputBox = Find<TextBox>(window, t => t.Name == "InputBox");
+        Assert.True(inputBox.IsEffectivelyVisible);
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public async Task 展开智能体按钮后出现选择器与三个参数滑块()
+    {
+        var (window, viewModel, workspace) = await CreateWindowAsync();
+        await using var _ = workspace;
+
+        var button = Find<Button>(window, b => b.Name == "AgentButton");
+        var flyout = Assert.IsType<Flyout>(button.Flyout);
+
+        flyout.ShowAt(button);
+        window.UpdateLayout();
+
+        var panel = Assert.IsType<StackPanel>(flyout.Content);
+        var descendants = panel.GetVisualDescendants().ToList();
+
+        // 智能体选择器
+        var combo = descendants.OfType<ComboBox>().FirstOrDefault();
+        Assert.NotNull(combo);
+        Assert.Same(viewModel.CurrentSession!.AvailableAgents, combo.ItemsSource);
+
+        // Temperature / Top P / Max Tokens 三个滑块
+        Assert.Equal(3, descendants.OfType<Slider>().Count());
+        Assert.NotEmpty(descendants.OfType<Button>());   // 重置按钮
+
+        flyout.Hide();
+        window.Close();
+    }
+
+    private static bool HasVisibleDescendant<T>(Visual root) where T : Visual =>
+        root.GetVisualDescendants().OfType<T>().Any(v => v.IsEffectivelyVisible);
+
+    [AvaloniaFact]
     public async Task 状态栏位于窗口底部且可见()
     {
         var (window, _, workspace) = await CreateWindowAsync();

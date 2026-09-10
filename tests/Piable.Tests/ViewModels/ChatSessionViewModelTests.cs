@@ -232,6 +232,53 @@ public class ChatSessionViewModelTests
     }
 
     [Fact]
+    public async Task 智能体按钮显示当前智能体名称()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.SseBody = MockOpenAiServer.BuildSse(["回答"]);
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+
+        Assert.Contains("通用助手", h.ViewModel.AgentButtonText);
+    }
+
+    [Fact]
+    public async Task 参数摘要反映当前取值()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.SseBody = MockOpenAiServer.BuildSse(["回答"]);
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+
+        h.ViewModel.Temperature = 1.25;
+        h.ViewModel.MaxTokens = 999;
+
+        Assert.Contains("Temperature 1.25", h.ViewModel.ParameterSummary);
+        Assert.Contains("Max Tokens 999", h.ViewModel.ParameterSummary);
+    }
+
+    [Fact]
+    public async Task 重置参数恢复智能体的默认值()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.SseBody = MockOpenAiServer.BuildSse(["回答"]);
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+
+        // 代码助手的 Temperature 为 0.2
+        h.ViewModel.SelectedAgent = h.Agents.Single(a => a.Id == ConfigService.CoderAgentId);
+        Assert.Equal(0.2, h.ViewModel.Temperature);
+
+        h.ViewModel.Temperature = 1.8;
+        h.ViewModel.MaxTokens = 123;
+
+        h.ViewModel.ResetParametersCommand.Execute(null);
+
+        Assert.Equal(0.2, h.ViewModel.Temperature);
+        Assert.Equal(2048, h.ViewModel.MaxTokens);
+    }
+
+    [Fact]
     public async Task 切换智能体后参数取智能体的覆盖值()
     {
         await using var server = MockOpenAiServer.Start();

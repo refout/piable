@@ -11,7 +11,7 @@
         x:DataType="vm:MainWindowViewModel"
         Icon="/Assets/logo.png"
         Width="1100" Height="720"
-        MinWidth="760" MinHeight="480"
+        MinWidth="560" MinHeight="400"
         Background="{DynamicResource AppBackground}"
         Title="Piable">
 
@@ -86,6 +86,20 @@
             <Setter Property="CornerRadius" Value="4" />
             <Setter Property="Padding" Value="8,6" />
             <Setter Property="MaxHeight" Value="260" />
+        </Style>
+
+        <!-- 右上角的智能体/参数入口 -->
+        <Style Selector="Button.agentButton">
+            <Setter Property="Background" Value="{DynamicResource PanelBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="10,5" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+        <Style Selector="Button.agentButton:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource HoverOverlay}" />
         </Style>
     </Window.Styles>
 
@@ -177,16 +191,103 @@
                             Background="{DynamicResource SurfaceBackground}"
                             BorderBrush="{DynamicResource BorderSubtle}"
                             BorderThickness="0,0,0,1">
+                        <!--
+                            标题占 * 列随窗口收缩；统计与按钮同属一个 Auto 列。
+                            统计文字必须限宽并允许省略——否则它的期望宽度会把这一列撑到
+                            超出窗口，右边缘的按钮就被挤出可视区域，用户根本点不到。
+                        -->
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Grid.Column="0"
                                        Text="{Binding CurrentSession.Title, FallbackValue=新对话}"
                                        FontSize="16" FontWeight="SemiBold"
                                        VerticalAlignment="Center"
+                                       Margin="0,0,12,0"
                                        TextTrimming="CharacterEllipsis" />
-                            <TextBlock Grid.Column="1"
-                                       Classes="secondary"
-                                       VerticalAlignment="Center"
-                                       Text="{Binding CurrentSession.HeaderStatistics}" />
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12"
+                                        VerticalAlignment="Center">
+                                <TextBlock Classes="secondary"
+                                           VerticalAlignment="Center"
+                                           MaxWidth="220"
+                                           TextTrimming="CharacterEllipsis"
+                                           Text="{Binding CurrentSession.HeaderStatistics}" />
+
+                                <!-- 智能体与参数：收进右上角的按钮，点击展开 -->
+                                <Button Name="AgentButton"
+                                        Classes="agentButton"
+                                        VerticalAlignment="Center"
+                                        ToolTip.Tip="{Binding CurrentSession.ParameterSummary, FallbackValue='选择智能体与参数'}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <TextBlock Text="{Binding CurrentSession.AgentButtonText, FallbackValue='🤖 智能体'}" />
+                                    <TextBlock Text="▾" Classes="secondary" VerticalAlignment="Center" />
+                                </StackPanel>
+
+                                <Button.Flyout>
+                                    <Flyout Placement="BottomEdgeAlignedRight">
+                                        <StackPanel Width="340" Spacing="10"
+                                                    DataContext="{Binding CurrentSession}"
+                                                    x:DataType="vm:ChatSessionViewModel">
+
+                                            <TextBlock Classes="sectionTitle" Text="智能体" />
+                                            <ComboBox ItemsSource="{Binding AvailableAgents}"
+                                                      SelectedItem="{Binding SelectedAgent}"
+                                                      HorizontalAlignment="Stretch">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate x:DataType="models:Agent">
+                                                        <TextBlock Text="{Binding Name}" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                            <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                       Text="{Binding AgentDescription}"
+                                                       IsVisible="{Binding HasAgentDescription}" />
+
+                                            <Border BorderBrush="{DynamicResource BorderSubtle}"
+                                                    BorderThickness="0,1,0,0" Margin="0,4" />
+
+                                            <TextBlock Classes="sectionTitle" Text="参数" />
+                                            <Grid ColumnDefinitions="Auto,*,38"
+                                                  RowDefinitions="Auto,Auto,Auto"
+                                                  ColumnSpacing="10" RowSpacing="8">
+                                                <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel"
+                                                           Text="Temperature" />
+                                                <Slider Grid.Row="0" Grid.Column="1"
+                                                        Minimum="0" Maximum="2" TickFrequency="0.1"
+                                                        Value="{Binding Temperature}" />
+                                                <TextBlock Grid.Row="0" Grid.Column="2" Classes="secondary"
+                                                           TextAlignment="Right" VerticalAlignment="Center"
+                                                           Text="{Binding Temperature, StringFormat='{}{0:0.##}'}" />
+
+                                                <TextBlock Grid.Row="1" Grid.Column="0" Classes="fieldLabel"
+                                                           Text="Top P" />
+                                                <Slider Grid.Row="1" Grid.Column="1"
+                                                        Minimum="0" Maximum="1" TickFrequency="0.05"
+                                                        Value="{Binding TopP}" />
+                                                <TextBlock Grid.Row="1" Grid.Column="2" Classes="secondary"
+                                                           TextAlignment="Right" VerticalAlignment="Center"
+                                                           Text="{Binding TopP, StringFormat='{}{0:0.##}'}" />
+
+                                                <TextBlock Grid.Row="2" Grid.Column="0" Classes="fieldLabel"
+                                                           Text="Max Tokens" />
+                                                <Slider Grid.Row="2" Grid.Column="1"
+                                                        Minimum="1" Maximum="4096" TickFrequency="1"
+                                                        Value="{Binding MaxTokens}" />
+                                                <TextBlock Grid.Row="2" Grid.Column="2" Classes="secondary"
+                                                           TextAlignment="Right" VerticalAlignment="Center"
+                                                           Text="{Binding MaxTokens}" />
+                                            </Grid>
+
+                                            <Button Content="↻ 重置为智能体默认"
+                                                    HorizontalAlignment="Left"
+                                                    Command="{Binding ResetParametersCommand}" />
+
+                                            <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                       Text="参数只在本次会话内生效，不会写回智能体配置；切换智能体会恢复其默认值。" />
+                                        </StackPanel>
+                                    </Flyout>
+                                </Button.Flyout>
+                                </Button>
+                            </StackPanel>
                         </Grid>
                     </Border>
 
@@ -267,64 +368,6 @@
                             BorderBrush="{DynamicResource BorderSubtle}"
                             BorderThickness="0,1,0,0">
                         <StackPanel Spacing="8">
-
-                            <!-- 智能体选择 / 参数开关 / 连接状态 -->
-                            <Grid ColumnDefinitions="Auto,Auto,*,Auto">
-                                <ComboBox Grid.Column="0"
-                                          MinWidth="160"
-                                          ItemsSource="{Binding CurrentSession.AvailableAgents}"
-                                          SelectedItem="{Binding CurrentSession.SelectedAgent}">
-                                    <ComboBox.ItemTemplate>
-                                        <DataTemplate x:DataType="models:Agent">
-                                            <TextBlock Text="{Binding Name}" />
-                                        </DataTemplate>
-                                    </ComboBox.ItemTemplate>
-                                </ComboBox>
-
-                                <ToggleButton Grid.Column="1"
-                                              Margin="8,0,0,0"
-                                              Content="⚙ 参数"
-                                              IsChecked="{Binding CurrentSession.IsParameterPanelExpanded}" />
-
-                                <TextBlock Grid.Column="3"
-                                           VerticalAlignment="Center"
-                                           FontSize="12"
-                                           Text="● 已连接"
-                                           IsVisible="{Binding IsConnected}"
-                                           Foreground="{DynamicResource SuccessBrush}" />
-                            </Grid>
-
-                            <!-- 参数面板 -->
-                            <Border Classes="card"
-                                    Padding="12,8"
-                                    IsVisible="{Binding CurrentSession.IsParameterPanelExpanded}">
-                                <Grid ColumnDefinitions="Auto,*,Auto,*"
-                                      RowDefinitions="Auto,Auto"
-                                      ColumnSpacing="10" RowSpacing="6">
-                                    <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel"
-                                               Text="Temperature" />
-                                    <Slider Grid.Row="0" Grid.Column="1"
-                                            Minimum="0" Maximum="2" TickFrequency="0.1"
-                                            Value="{Binding CurrentSession.Temperature}" />
-                                    <TextBlock Grid.Row="0" Grid.Column="2" Classes="fieldLabel"
-                                               Text="Top P" />
-                                    <Slider Grid.Row="0" Grid.Column="3"
-                                            Minimum="0" Maximum="1" TickFrequency="0.05"
-                                            Value="{Binding CurrentSession.TopP}" />
-
-                                    <TextBlock Grid.Row="1" Grid.Column="0" Classes="fieldLabel"
-                                               Text="Max Tokens" />
-                                    <Slider Grid.Row="1" Grid.Column="1"
-                                            Minimum="1" Maximum="4096" TickFrequency="1"
-                                            Value="{Binding CurrentSession.MaxTokens}" />
-                                    <TextBlock Grid.Row="1" Grid.Column="2" Classes="secondary"
-                                               VerticalAlignment="Center"
-                                               Text="{Binding CurrentSession.Temperature, StringFormat='T={0:F1}'}" />
-                                    <TextBlock Grid.Row="1" Grid.Column="3" Classes="secondary"
-                                               VerticalAlignment="Center"
-                                               Text="{Binding CurrentSession.MaxTokens, StringFormat='Max={0}'}" />
-                                </Grid>
-                            </Border>
 
                             <!-- 输入框与发送/停止 -->
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">

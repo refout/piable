@@ -29,7 +29,11 @@ public partial class App : Application
             viewModel.ThemeChangeRequested += (_, theme) => ApplyTheme(theme);
 
             var window = new MainWindow { DataContext = viewModel };
-            ApplyInitialSize(window);
+
+            // 尺寸必须在窗口显示之后再定：窗口尚未创建平台句柄时 Screens 为 null，
+            // 那时算不出可用区域，只能退回 XAML 里写死的 1100×720 ——
+            // 在高 DPI 的小屏上这会得到一个比屏幕还大的窗口，右边缘被推到屏幕外。
+            window.Opened += (_, _) => ApplyInitialSize(window);
 
             desktop.MainWindow = window;
             desktop.ShutdownRequested += OnShutdownRequested;
@@ -177,9 +181,12 @@ public partial class App : Application
     {
         const double preferredWidth = 1100;
         const double preferredHeight = 720;
-        const double margin = 60;
+        const double margin = 40;
 
-        var screen = window.Screens.Primary ?? window.Screens.All.FirstOrDefault();
+        var screen = window.Screens.ScreenFromWindow(window)
+                     ?? window.Screens.Primary
+                     ?? window.Screens.All.FirstOrDefault();
+
         if (screen is null)
         {
             return;
@@ -189,8 +196,11 @@ public partial class App : Application
         var availableWidth = screen.WorkingArea.Width / scaling - margin;
         var availableHeight = screen.WorkingArea.Height / scaling - margin;
 
-        window.Width = Math.Max(window.MinWidth, Math.Min(preferredWidth, availableWidth));
-        window.Height = Math.Max(window.MinHeight, Math.Min(preferredHeight, availableHeight));
+        // 先按可用区域收窄，再套下限。顺序不能反：若先套 MinWidth，
+        // 屏幕比 MinWidth 还窄时窗口仍会溢出屏幕。
+        window.Width = Math.Min(preferredWidth, Math.Max(320, availableWidth));
+        window.Height = Math.Min(preferredHeight, Math.Max(240, availableHeight));
+
         window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
     }
 
