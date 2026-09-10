@@ -87,9 +87,7 @@ public static class ProviderPresets
 /// </summary>
 public static class ModelPricingPresets
 {
-    public sealed record PricingEntry(string Model, decimal InputPer1K, decimal OutputPer1K);
-
-    public static IReadOnlyList<PricingEntry> All { get; } =
+    public static IReadOnlyList<ModelPricingEntry> All { get; } =
     [
         new("gpt-4o", 0.0025m, 0.010m),
         new("gpt-4o-mini", 0.00015m, 0.0006m),
@@ -100,8 +98,14 @@ public static class ModelPricingPresets
     ];
 
     /// <summary>按模型名精确匹配定价；找不到返回 null。</summary>
-    public static PricingEntry? Find(string? model) =>
+    public static ModelPricingEntry? Find(string? model) =>
         string.IsNullOrWhiteSpace(model)
             ? null
             : All.FirstOrDefault(p => string.Equals(p.Model, model, StringComparison.OrdinalIgnoreCase));
 }
+
+/// <summary>
+/// 一条模型定价参考值。定义为顶层类型而非 <see cref="ModelPricingPresets"/> 的嵌套类型：
+/// XAML 的 x:DataType 无法解析嵌套类型名。
+/// </summary>
+public sealed record ModelPricingEntry(string Model, decimal InputPer1K, decimal OutputPer1K);

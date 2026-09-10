@@ -90,7 +90,7 @@ public sealed partial class ProviderConfigViewModel : ViewModelBase
 
     public ObservableCollection<string> Models { get; } = [];
 
-    public IReadOnlyList<ModelPricingPresets.PricingEntry> PricingPresets => ModelPricingPresets.All;
+    public IReadOnlyList<ModelPricingEntry> PricingPresets => ModelPricingPresets.All;
 
     /// <summary>当前配置的预设是否为 Azure（决定是否显示部署名输入框）。</summary>
     public bool IsAzure => SelectedPreset?.ProviderType == ProviderType.AzureOpenAI;
@@ -243,9 +243,9 @@ public sealed partial class ProviderConfigViewModel : ViewModelBase
     /// 以便直接绑定到 ComboBox 的 SelectedItem。
     /// </summary>
     [ObservableProperty]
-    private ModelPricingPresets.PricingEntry? _selectedPricingPreset;
+    private ModelPricingEntry? _selectedPricingPreset;
 
-    partial void OnSelectedPricingPresetChanged(ModelPricingPresets.PricingEntry? value)
+    partial void OnSelectedPricingPresetChanged(ModelPricingEntry? value)
     {
         if (value is null)
         {

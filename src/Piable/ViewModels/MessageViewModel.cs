@@ -1,4 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using LiveMarkdown.Avalonia;
 using Piable.Models;
 using Piable.Services;
 
@@ -26,9 +28,16 @@ public sealed partial class MessageViewModel : ViewModelBase
         _calculator = calculator;
         _preferences = preferences;
         _isStatisticsExpanded = preferences.ExpandStatisticsByDefault;
+
+        // LiveMarkdown 的流式渲染直接订阅这个可观察字符串，
+        // 逐段 Append 即可增量重排，无需每次重新解析整篇内容。
+        MarkdownBuilder = new ObservableStringBuilder(model.Content);
     }
 
     public ChatMessage Model { get; }
+
+    /// <summary>供 MarkdownRenderer.MarkdownBuilder 绑定的流式 Markdown 源。</summary>
+    public ObservableStringBuilder MarkdownBuilder { get; }
 
     public MessageRole Role => Model.Role;
 
@@ -97,6 +106,7 @@ public sealed partial class MessageViewModel : ViewModelBase
     public void AppendText(string delta)
     {
         Model.Content += delta;
+        MarkdownBuilder.Append(delta);
         OnPropertyChanged(nameof(Content));
     }
 
@@ -141,6 +151,10 @@ public sealed partial class MessageViewModel : ViewModelBase
         OnPropertyChanged(nameof(StatisticsText));
         OnPropertyChanged(nameof(ShouldShowStatistics));
     }
+
+    /// <summary>点击统计文字：在摘要与明细之间切换（设计文档 9.3）。</summary>
+    [RelayCommand]
+    private void ToggleStatistics() => IsStatisticsExpanded = !IsStatisticsExpanded;
 
     /// <summary>用户偏好变化后重新求值统计文本。</summary>
     public void RefreshStatistics()

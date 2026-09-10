@@ -1,22 +1,654 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Piable.ViewModels"
+        xmlns:models="using:Piable.Models"
+        xmlns:lm="using:LiveMarkdown.Avalonia"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+        mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="720"
         x:Class="Piable.Views.MainWindow"
-        x:DataType="vm:MainViewModel"
+        x:DataType="vm:MainWindowViewModel"
         Icon="/Assets/avalonia-logo.ico"
+        Width="1100" Height="720"
+        MinWidth="760" MinHeight="480"
+        Background="{DynamicResource AppBackground}"
         Title="Piable">
 
-    <Design.DataContext>
-        <!-- This only sets the DataContext for the previewer in an IDE,
-             to set the actual DataContext for runtime, set the DataContext property in code (look at App.axaml.cs) -->
-        <vm:MainViewModel />
-    </Design.DataContext>
+    <Window.Styles>
+        <!-- 消息气泡：用样式类而非转换器决定左右对齐 -->
+        <Style Selector="Border.bubble">
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="12,9" />
+            <Setter Property="MaxWidth" Value="720" />
+            <Setter Property="Margin" Value="0,4" />
+        </Style>
+        <Style Selector="Border.bubble.user">
+            <Setter Property="HorizontalAlignment" Value="Right" />
+            <Setter Property="Background" Value="{DynamicResource UserBubble}" />
+        </Style>
+        <Style Selector="Border.bubble.assistant">
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="Background" Value="{DynamicResource AssistantBubble}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
 
-    <TextBox Text="{Binding Greeting}"
-             HorizontalAlignment="Center"
-             VerticalAlignment="Center" />
+        <!-- 统计行做成无边框按钮，可点击展开明细 -->
+        <Style Selector="Button.stats">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0,6,0,0" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+        </Style>
 
+        <!-- 会话项上的删除按钮：平时隐藏，悬停整行时浮现 -->
+        <Style Selector="Button.rowDelete">
+            <Setter Property="IsVisible" Value="False" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="Padding" Value="5,2" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="VerticalAlignment" Value="Top" />
+        </Style>
+        <Style Selector="ListBoxItem:pointerover Button.rowDelete">
+            <Setter Property="IsVisible" Value="True" />
+        </Style>
+        <Style Selector="Button.rowDelete:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource HoverOverlay}" />
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="*,Auto">
+
+        <!-- ==================== 主体：左面板 + 右区域 ==================== -->
+        <Grid Grid.Row="0" ColumnDefinitions="Auto,*">
+
+            <!-- ========== 左侧面板 ========== -->
+            <Border Grid.Column="0"
+                    Name="LeftPanel"
+                    Width="{Binding LeftPanelWidth}"
+                    Background="{DynamicResource PanelBackground}"
+                    BorderBrush="{DynamicResource BorderSubtle}"
+                    BorderThickness="0,0,1,0">
+                <Grid RowDefinitions="Auto,*,Auto">
+
+                    <!-- 折叠按钮 -->
+                    <Button Grid.Row="0"
+                            Classes="flat"
+                            Command="{Binding ToggleLeftPanelCommand}"
+                            ToolTip.Tip="折叠/展开侧边栏"
+                            Margin="4,6">
+                        <TextBlock Text="≡" FontSize="16" />
+                    </Button>
+
+                    <!-- 会话列表 -->
+                    <Grid Grid.Row="1" RowDefinitions="Auto,*"
+                          IsVisible="{Binding !IsLeftPanelCollapsed}">
+                        <TextBlock Grid.Row="0" Text="📝 对话历史"
+                                   Classes="sectionTitle" Margin="14,6,14,4" />
+
+                        <ListBox Grid.Row="1"
+                                 Classes="sessionList"
+                                 ItemsSource="{Binding Sessions}"
+                                 SelectedItem="{Binding SelectedSession}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:SessionListItemViewModel">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <StackPanel Grid.Column="0" Spacing="2">
+                                            <TextBlock Text="{Binding Title}"
+                                                       FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding SummaryText}"
+                                                       Classes="secondary"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+
+                                        <!-- 内联二次确认：平时是 ✕，确认态变成红色"确认删除？" -->
+                                        <Panel Grid.Column="1">
+                                            <Button Classes="rowDelete"
+                                                    Content="✕"
+                                                    IsVisible="{Binding !IsConfirmingDelete}"
+                                                    Command="{Binding RequestDeleteCommand}"
+                                                    ToolTip.Tip="删除对话" />
+                                            <Button Classes="danger"
+                                                    Content="确认删除？"
+                                                    IsVisible="{Binding IsConfirmingDelete}"
+                                                    Command="{Binding RequestDeleteCommand}" />
+                                        </Panel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+
+                    <!-- 底部操作 -->
+                    <StackPanel Grid.Row="2" Margin="6,6,6,10" Spacing="2"
+                                IsVisible="{Binding !IsLeftPanelCollapsed}">
+                        <Button Classes="flat"
+                                Command="{Binding NewSessionCommand}"
+                                Content="✨ 新对话" />
+                        <Button Classes="flat"
+                                Command="{Binding ToggleConfigViewCommand}"
+                                Content="⚙ 配置" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- ========== 右侧主区域 ========== -->
+            <Grid Grid.Column="1">
+
+                <!-- ======== 对话视图 ======== -->
+                <Grid RowDefinitions="Auto,*,Auto"
+                      IsVisible="{Binding !IsConfigView}">
+
+                    <!-- 标题栏 -->
+                    <Border Grid.Row="0" Padding="18,12"
+                            Background="{DynamicResource SurfaceBackground}"
+                            BorderBrush="{DynamicResource BorderSubtle}"
+                            BorderThickness="0,0,0,1">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0"
+                                       Text="{Binding CurrentSession.Title, FallbackValue=新对话}"
+                                       FontSize="16" FontWeight="SemiBold"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock Grid.Column="1"
+                                       Classes="secondary"
+                                       VerticalAlignment="Center"
+                                       Text="{Binding CurrentSession.HeaderStatistics}" />
+                        </Grid>
+                    </Border>
+
+                    <!-- 消息列表 -->
+                    <ScrollViewer Grid.Row="1" Name="MessageScrollViewer"
+                                  Padding="18,12"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <ItemsControl ItemsSource="{Binding CurrentSession.Messages}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:MessageViewModel">
+                                    <Border Classes="bubble"
+                                            Classes.user="{Binding IsUser}"
+                                            Classes.assistant="{Binding IsAssistant}">
+                                        <StackPanel>
+                                            <!-- 用户消息：纯文本 -->
+                                            <TextBlock Text="{Binding Content}"
+                                                       TextWrapping="Wrap"
+                                                       IsVisible="{Binding IsUser}" />
+
+                                            <!-- 助手消息：Markdown 流式渲染 -->
+                                            <lm:MarkdownRenderer MarkdownBuilder="{Binding MarkdownBuilder}"
+                                                                 IsVisible="{Binding IsAssistant}" />
+
+                                            <!-- 统计：点击展开明细 -->
+                                            <Button Classes="stats"
+                                                    Command="{Binding ToggleStatisticsCommand}"
+                                                    IsVisible="{Binding ShouldShowStatistics}">
+                                                <TextBlock Text="{Binding StatisticsText}"
+                                                           Foreground="{DynamicResource TextSecondary}" />
+                                            </Button>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <!-- 输入区 -->
+                    <Border Grid.Row="2" Padding="14,10"
+                            Background="{DynamicResource SurfaceBackground}"
+                            BorderBrush="{DynamicResource BorderSubtle}"
+                            BorderThickness="0,1,0,0">
+                        <StackPanel Spacing="8">
+
+                            <!-- 智能体选择 / 参数开关 / 连接状态 -->
+                            <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                                <ComboBox Grid.Column="0"
+                                          MinWidth="160"
+                                          ItemsSource="{Binding CurrentSession.AvailableAgents}"
+                                          SelectedItem="{Binding CurrentSession.SelectedAgent}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="models:Agent">
+                                            <TextBlock Text="{Binding Name}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+
+                                <ToggleButton Grid.Column="1"
+                                              Margin="8,0,0,0"
+                                              Content="⚙ 参数"
+                                              IsChecked="{Binding CurrentSession.IsParameterPanelExpanded}" />
+
+                                <TextBlock Grid.Column="3"
+                                           VerticalAlignment="Center"
+                                           FontSize="12"
+                                           Text="● 已连接"
+                                           IsVisible="{Binding IsConnected}"
+                                           Foreground="{DynamicResource SuccessBrush}" />
+                            </Grid>
+
+                            <!-- 参数面板 -->
+                            <Border Classes="card"
+                                    Padding="12,8"
+                                    IsVisible="{Binding CurrentSession.IsParameterPanelExpanded}">
+                                <Grid ColumnDefinitions="Auto,*,Auto,*"
+                                      RowDefinitions="Auto,Auto"
+                                      ColumnSpacing="10" RowSpacing="6">
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel"
+                                               Text="Temperature" />
+                                    <Slider Grid.Row="0" Grid.Column="1"
+                                            Minimum="0" Maximum="2" TickFrequency="0.1"
+                                            Value="{Binding CurrentSession.Temperature}" />
+                                    <TextBlock Grid.Row="0" Grid.Column="2" Classes="fieldLabel"
+                                               Text="Top P" />
+                                    <Slider Grid.Row="0" Grid.Column="3"
+                                            Minimum="0" Maximum="1" TickFrequency="0.05"
+                                            Value="{Binding CurrentSession.TopP}" />
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Classes="fieldLabel"
+                                               Text="Max Tokens" />
+                                    <Slider Grid.Row="1" Grid.Column="1"
+                                            Minimum="1" Maximum="4096" TickFrequency="1"
+                                            Value="{Binding CurrentSession.MaxTokens}" />
+                                    <TextBlock Grid.Row="1" Grid.Column="2" Classes="secondary"
+                                               VerticalAlignment="Center"
+                                               Text="{Binding CurrentSession.Temperature, StringFormat='T={0:F1}'}" />
+                                    <TextBlock Grid.Row="1" Grid.Column="3" Classes="secondary"
+                                               VerticalAlignment="Center"
+                                               Text="{Binding CurrentSession.MaxTokens, StringFormat='Max={0}'}" />
+                                </Grid>
+                            </Border>
+
+                            <!-- 输入框与发送/停止 -->
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <TextBox Grid.Column="0"
+                                         Name="InputBox"
+                                         AcceptsReturn="True"
+                                         TextWrapping="Wrap"
+                                         MinHeight="64" MaxHeight="180"
+                                         PlaceholderText="输入消息，Enter 发送，Shift+Enter 换行"
+                                         Text="{Binding CurrentSession.InputText}" />
+
+                                <Panel Grid.Column="1" VerticalAlignment="Bottom">
+                                    <Button Classes="primary"
+                                            Content="发送"
+                                            MinWidth="72"
+                                            Command="{Binding CurrentSession.SendCommand}"
+                                            IsVisible="{Binding !CurrentSession.IsGenerating}" />
+                                    <Button Classes="primary"
+                                            Content="停止"
+                                            MinWidth="72"
+                                            Command="{Binding CurrentSession.StopCommand}"
+                                            IsVisible="{Binding CurrentSession.IsGenerating}" />
+                                </Panel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <!-- ======== 配置视图 ======== -->
+                <Grid RowDefinitions="Auto,*" IsVisible="{Binding IsConfigView}">
+
+                    <Border Grid.Row="0" Padding="18,12"
+                            Background="{DynamicResource SurfaceBackground}"
+                            BorderBrush="{DynamicResource BorderSubtle}"
+                            BorderThickness="0,0,0,1">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="⚙ 配置" FontSize="16" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <Button Grid.Column="1" Classes="flat" Content="✕ 返回对话"
+                                    Command="{Binding CloseConfigViewCommand}" />
+                        </Grid>
+                    </Border>
+
+                    <TabControl Grid.Row="1" Margin="12">
+                        <TabItem Header="API 配置">
+                            <ScrollViewer>
+                                <StackPanel Margin="8" Spacing="10" MaxWidth="760"
+                                            HorizontalAlignment="Left">
+
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Classes="sectionTitle" Text="选择供应商" />
+                                        <ComboBox ItemsSource="{Binding ProviderConfig.AvailablePresets}"
+                                                  SelectedItem="{Binding ProviderConfig.SelectedPreset}"
+                                                  MinWidth="240">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="models:ProviderPreset">
+                                                    <TextBlock Text="{Binding DisplayName}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </StackPanel>
+
+                                    <StackPanel Spacing="4"
+                                                IsVisible="{Binding ProviderConfig.RequiresApiKey}">
+                                        <TextBlock Classes="sectionTitle" Text="API Key" />
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBox Grid.Column="0"
+                                                     PasswordChar="●"
+                                                     Text="{Binding ProviderConfig.ApiKey}"
+                                                     PlaceholderText="sk-..." />
+                                            <TextBlock Grid.Column="0"
+                                                       VerticalAlignment="Center"
+                                                       Margin="8,0"
+                                                       IsVisible="{Binding ProviderConfig.IsApiKeyVisible}"
+                                                       Text="{Binding ProviderConfig.ApiKey}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <ToggleButton Grid.Column="1" Margin="6,0,0,0"
+                                                          Content="显示"
+                                                          IsChecked="{Binding ProviderConfig.IsApiKeyVisible}" />
+                                        </Grid>
+                                    </StackPanel>
+
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Classes="sectionTitle" Text="Endpoint" />
+                                        <TextBox Text="{Binding ProviderConfig.Endpoint}"
+                                                 PlaceholderText="https://api.openai.com/v1" />
+                                    </StackPanel>
+
+                                    <StackPanel Spacing="4"
+                                                IsVisible="{Binding ProviderConfig.IsAzure}">
+                                        <TextBlock Classes="sectionTitle" Text="部署名（Deployment）" />
+                                        <TextBox Text="{Binding ProviderConfig.DeploymentName}"
+                                                 PlaceholderText="gpt-4o" />
+                                    </StackPanel>
+
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Classes="sectionTitle" Text="模型列表" />
+                                        <ListBox ItemsSource="{Binding ProviderConfig.Models}"
+                                                 SelectedItem="{Binding ProviderConfig.SelectedModel}"
+                                                 MaxHeight="140" />
+                                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+                                            <TextBox Grid.Column="0"
+                                                     Text="{Binding ProviderConfig.NewModelName}"
+                                                     PlaceholderText="手动添加模型名" />
+                                            <Button Grid.Column="1" Content="+ 添加"
+                                                    Command="{Binding ProviderConfig.AddModelCommand}" />
+                                            <Button Grid.Column="2" Content="✕ 移除"
+                                                    Command="{Binding ProviderConfig.RemoveModelCommand}" />
+                                        </Grid>
+                                        <Button Content="🔄 获取模型列表"
+                                                HorizontalAlignment="Left"
+                                                IsEnabled="{Binding !ProviderConfig.IsBusy}"
+                                                Command="{Binding ProviderConfig.FetchModelsCommand}" />
+                                    </StackPanel>
+
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Classes="sectionTitle" Text="默认模型" />
+                                        <ComboBox ItemsSource="{Binding ProviderConfig.Models}"
+                                                  SelectedItem="{Binding ProviderConfig.DefaultModel}"
+                                                  MinWidth="240" />
+                                    </StackPanel>
+
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Classes="sectionTitle" Text="默认参数" />
+                                        <Grid ColumnDefinitions="Auto,*,Auto,*"
+                                              ColumnSpacing="10" RowSpacing="6"
+                                              RowDefinitions="Auto,Auto,Auto">
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel"
+                                                       Text="Temperature" />
+                                            <Slider Grid.Row="0" Grid.Column="1" Minimum="0" Maximum="2"
+                                                    Value="{Binding ProviderConfig.Temperature}" />
+                                            <TextBlock Grid.Row="0" Grid.Column="2" Classes="fieldLabel"
+                                                       Text="Top P" />
+                                            <Slider Grid.Row="0" Grid.Column="3" Minimum="0" Maximum="1"
+                                                    Value="{Binding ProviderConfig.TopP}" />
+
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Classes="fieldLabel"
+                                                       Text="Max Tokens" />
+                                            <Slider Grid.Row="1" Grid.Column="1" Minimum="1" Maximum="4096"
+                                                    Value="{Binding ProviderConfig.MaxTokens}" />
+                                        </Grid>
+                                    </StackPanel>
+
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Classes="sectionTitle" Text="模型定价（每 1K tokens）" />
+                                        <TextBlock Classes="secondary"
+                                                   Text="价格以当前所选货币计。内置参考价可能滞后于官方调整，可自行覆盖。" />
+                                        <ComboBox ItemsSource="{Binding ProviderConfig.PricingPresets}"
+                                                  SelectedItem="{Binding ProviderConfig.SelectedPricingPreset}"
+                                                  MinWidth="240"
+                                                  PlaceholderText="选择常用模型自动填入">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="models:ModelPricingEntry">
+                                                    <TextBlock Text="{Binding Model}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                        <Grid ColumnDefinitions="Auto,120,Auto,120" ColumnSpacing="8">
+                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="输入" />
+                                            <NumericUpDown Grid.Column="1"
+                                                           Increment="0.0001" FormatString="0.0000"
+                                                           Value="{Binding ProviderConfig.InputPricePer1K}" />
+                                            <TextBlock Grid.Column="2" Classes="fieldLabel" Text="输出" />
+                                            <NumericUpDown Grid.Column="3"
+                                                           Increment="0.0001" FormatString="0.0000"
+                                                           Value="{Binding ProviderConfig.OutputPricePer1K}" />
+                                        </Grid>
+                                    </StackPanel>
+
+                                    <CheckBox Content="设为默认供应商"
+                                              IsChecked="{Binding ProviderConfig.IsDefault}" />
+
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Classes="primary" Content="保存配置"
+                                                Command="{Binding ProviderConfig.SaveCommand}" />
+                                        <Button Content="测试连接"
+                                                IsEnabled="{Binding !ProviderConfig.IsBusy}"
+                                                Command="{Binding ProviderConfig.TestConnectionCommand}" />
+                                    </StackPanel>
+
+                                    <TextBlock Text="{Binding ProviderConfig.StatusMessage}"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <TabItem Header="智能体管理">
+                            <Grid ColumnDefinitions="260,*" Margin="8">
+
+                                <StackPanel Grid.Column="0" Spacing="8">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Classes="sectionTitle" Text="📋 我的智能体"
+                                                   VerticalAlignment="Center" />
+                                        <Button Grid.Column="1" Content="+ 新建"
+                                                Command="{Binding AgentConfig.NewAgentCommand}" />
+                                    </Grid>
+
+                                    <ListBox ItemsSource="{Binding AgentConfig.Agents}"
+                                             SelectedItem="{Binding AgentConfig.SelectedAgent}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:AgentListItemViewModel">
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <StackPanel Grid.Column="0" Spacing="2">
+                                                        <TextBlock Text="{Binding DisplayName}"
+                                                                   FontWeight="SemiBold"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Text="{Binding Description}"
+                                                                   Classes="secondary"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                    </StackPanel>
+                                                    <Panel Grid.Column="1">
+                                                        <Button Classes="rowDelete" Content="✕"
+                                                                IsVisible="{Binding !IsConfirmingDelete}"
+                                                                Command="{Binding RequestDeleteCommand}" />
+                                                        <Button Classes="danger" Content="确认删除？"
+                                                                IsVisible="{Binding IsConfirmingDelete}"
+                                                                Command="{Binding RequestDeleteCommand}" />
+                                                    </Panel>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </StackPanel>
+
+                                <ScrollViewer Grid.Column="1" Margin="12,0,0,0">
+                                    <StackPanel Spacing="8" MaxWidth="640"
+                                                HorizontalAlignment="Left"
+                                                IsVisible="{Binding AgentConfig.HasSelection}">
+
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Classes="sectionTitle" Text="名称" />
+                                            <TextBox Text="{Binding AgentConfig.Name}" />
+                                        </StackPanel>
+
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Classes="sectionTitle" Text="描述" />
+                                            <TextBox Text="{Binding AgentConfig.Description}" />
+                                        </StackPanel>
+
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Classes="sectionTitle" Text="系统提示词" />
+                                            <TextBox Text="{Binding AgentConfig.SystemPrompt}"
+                                                     AcceptsReturn="True"
+                                                     TextWrapping="Wrap"
+                                                     Height="180" />
+                                        </StackPanel>
+
+                                        <CheckBox Content="跟随供应商默认参数"
+                                                  IsChecked="{Binding AgentConfig.FollowProviderDefaults}" />
+
+                                        <StackPanel Spacing="4"
+                                                    IsVisible="{Binding !AgentConfig.FollowProviderDefaults}">
+                                            <TextBlock Classes="sectionTitle" Text="指定模型" />
+                                            <TextBox Text="{Binding AgentConfig.Model}"
+                                                     PlaceholderText="留空则使用供应商默认模型" />
+
+                                            <Grid ColumnDefinitions="Auto,*,Auto,*"
+                                                  ColumnSpacing="10" RowDefinitions="Auto,Auto">
+                                                <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel"
+                                                           Text="Temperature" />
+                                                <Slider Grid.Row="0" Grid.Column="1" Minimum="0" Maximum="2"
+                                                        Value="{Binding AgentConfig.Temperature}" />
+                                                <TextBlock Grid.Row="0" Grid.Column="2" Classes="fieldLabel"
+                                                           Text="Top P" />
+                                                <Slider Grid.Row="0" Grid.Column="3" Minimum="0" Maximum="1"
+                                                        Value="{Binding AgentConfig.TopP}" />
+
+                                                <TextBlock Grid.Row="1" Grid.Column="0" Classes="fieldLabel"
+                                                           Text="Max Tokens" />
+                                                <Slider Grid.Row="1" Grid.Column="1" Minimum="1" Maximum="4096"
+                                                        Value="{Binding AgentConfig.MaxTokens}" />
+                                            </Grid>
+                                        </StackPanel>
+
+                                        <Border Classes="card" Padding="12,8">
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Classes="sectionTitle" Text="MCP 服务器与技能" />
+                                                <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                           Text="MCP 客户端与技能执行将在下一阶段实现，当前版本对话不携带外部工具。" />
+                                            </StackPanel>
+                                        </Border>
+
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Button Classes="primary" Content="💾 保存"
+                                                    Command="{Binding AgentConfig.SaveCommand}" />
+                                            <Button Content="★ 设为默认"
+                                                    Command="{Binding AgentConfig.SetDefaultCommand}" />
+                                            <Button Content="↻ 恢复默认提示词"
+                                                    Command="{Binding AgentConfig.RestoreDefaultsCommand}" />
+                                        </StackPanel>
+
+                                        <TextBlock Text="{Binding AgentConfig.StatusMessage}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="偏好设置">
+                            <ScrollViewer>
+                                <StackPanel Margin="8" Spacing="10" MaxWidth="560"
+                                            HorizontalAlignment="Left">
+
+                                    <TextBlock Classes="sectionTitle" Text="统计显示" />
+                                    <CheckBox Content="显示统计信息"
+                                              IsChecked="{Binding Preferences.ShowStatistics}" />
+                                    <CheckBox Content="显示费用"
+                                              IsChecked="{Binding Preferences.ShowCost}" />
+                                    <CheckBox Content="始终显示详细 Token（输入/输出分开）"
+                                              IsChecked="{Binding Preferences.ShowDetailedTokens}" />
+                                    <CheckBox Content="默认展开消息统计"
+                                              IsChecked="{Binding Preferences.ExpandStatisticsByDefault}" />
+
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Classes="sectionTitle" Text="货币单位" />
+                                        <ComboBox ItemsSource="{Binding Preferences.AvailableCurrencies}"
+                                                  SelectedItem="{Binding Preferences.Currency}"
+                                                  MinWidth="160" />
+                                        <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                   Text="仅改变显示符号；模型定价按所选货币填写，不做汇率换算。" />
+                                    </StackPanel>
+
+                                    <TextBlock Classes="sectionTitle" Text="主题" Margin="0,8,0,0" />
+                                    <ComboBox ItemsSource="{Binding Preferences.AvailableThemes}"
+                                              SelectedItem="{Binding Preferences.Theme}"
+                                              MinWidth="160" />
+
+                                    <TextBlock Classes="sectionTitle" Text="默认智能体" Margin="0,8,0,0" />
+                                    <ComboBox ItemsSource="{Binding Preferences.AvailableAgents}"
+                                              SelectedItem="{Binding Preferences.DefaultAgent}"
+                                              MinWidth="220">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:AgentListItemViewModel">
+                                                <TextBlock Text="{Binding DisplayName}" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+
+                                    <StackPanel Spacing="4" Margin="0,8,0,0">
+                                        <TextBlock Classes="sectionTitle" Text="请求超时（秒）" />
+                                        <NumericUpDown Value="{Binding Preferences.RequestTimeoutSeconds}"
+                                                       Minimum="10" Maximum="3600"
+                                                       Increment="10" />
+                                        <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                   Text="单次生成的总时长上限，不是空闲检测。长回答可适当调大。" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </Grid>
+        </Grid>
+
+        <!-- ==================== 状态栏 ==================== -->
+        <Border Grid.Row="1" Name="StatusBar" Padding="14,5"
+                Background="{DynamicResource PanelBackground}"
+                BorderBrush="{DynamicResource BorderSubtle}"
+                BorderThickness="0,1,0,0">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                <!-- 连接指示：用两段互相排斥的文本，避免给 Run 绑 IsVisible -->
+                <Panel Grid.Column="0">
+                    <TextBlock Text="●" FontSize="12" VerticalAlignment="Center"
+                               Foreground="{DynamicResource SuccessBrush}"
+                               IsVisible="{Binding IsConnected}"
+                               ToolTip.Tip="已连接" />
+                    <TextBlock Text="○" FontSize="12" VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextSecondary}"
+                               IsVisible="{Binding !IsConnected}"
+                               ToolTip.Tip="未连接" />
+                </Panel>
+
+                <TextBlock Grid.Column="1" Margin="6,0,0,0" FontSize="12"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextSecondary}"
+                           Text="{Binding ProviderModelText}" />
+
+                <TextBlock Grid.Column="2" Margin="16,0" FontSize="12"
+                           VerticalAlignment="Center"
+                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                           Text="{Binding StatusMessage}" />
+
+                <TextBlock Grid.Column="3" FontSize="12"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextSecondary}"
+                           Text="{Binding BusyMessage}" />
+            </Grid>
+        </Border>
+    </Grid>
 </Window>

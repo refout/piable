@@ -6,6 +6,9 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
 
+    <!-- xunit v3 的测试项目是可执行程序 -->
+    <OutputType>Exe</OutputType>
+
     <!-- 必须与 Piable.csproj 保持一致：该开关写在运行宿主的 runtimeconfig.json 中，
          测试宿主是 testhost.exe 而非 Piable.exe，不在此处声明就不会生效，
          测试也就无法覆盖生产环境真实的序列化约束。 -->
@@ -13,9 +16,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Avalonia.Headless" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="12.1.2" />
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
-    <PackageReference Include="xunit" Version="2.9.3" />
+    <!-- 用 xunit v3：Avalonia.Headless.XUnit 12.x 只支持 v3，v2 会与它带的 xunit.v3.core 冲突 -->
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
 

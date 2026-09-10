@@ -1,6 +1,12 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Styling;
+using Microsoft.Extensions.DependencyInjection;
+using Piable.Helpers;
+using Piable.Services;
+using Piable.Services.Storage;
 using Piable.ViewModels;
 using Piable.Views;
 
@@ -8,21 +14,175 @@ namespace Piable;
 
 public partial class App : Application
 {
-    public override void Initialize()
-    {
-        AvaloniaXamlLoader.Load(this);
-    }
+    private ServiceProvider? _services;
+
+    public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            desktop.MainWindow = new MainWindow
-            {
-                DataContext = new MainViewModel(),
-            };
+            _services = BuildServices();
+
+            var viewModel = _services.GetRequiredService<MainWindowViewModel>();
+            viewModel.ThemeChangeRequested += (_, theme) => ApplyTheme(theme);
+
+            var window = new MainWindow { DataContext = viewModel };
+            ApplyInitialSize(window);
+
+            desktop.MainWindow = window;
+            desktop.ShutdownRequested += OnShutdownRequested;
+
+            _ = StartAsync(_services);
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    /// <summary>
+    /// 全部依赖用显式工厂委托注册。
+    /// 不用 <c>AddSingleton&lt;IFoo, Foo&gt;()</c> 的自动激活：那条路走反射构造，
+    /// 与项目追求的 AOT 兼容性冲突，而工厂委托是编译期就确定的。
+    /// </summary>
+    private static ServiceProvider BuildServices()
+    {
+        var services = new ServiceCollection();
+
+        var paths = AppPaths.CreateDefault();
+        services.AddSingleton(paths);
+        services.AddSingleton<ISecretProtector>(_ => AesGcmSecretProtector.LoadOrCreate(paths.KeyFilePath));
+        services.AddSingleton(_ => new PiableDatabase(paths.DatabasePath));
+
+        services.AddSingleton(sp => new ProviderRepository(
+            sp.GetRequiredService<PiableDatabase>(), sp.GetRequiredService<ISecretProtector>()));
+        services.AddSingleton(sp => new AgentRepository(sp.GetRequiredService<PiableDatabase>()));
+        services.AddSingleton(sp => new McpServerRepository(sp.GetRequiredService<PiableDatabase>()));
+        services.AddSingleton(sp => new SkillRepository(sp.GetRequiredService<PiableDatabase>()));
+        services.AddSingleton(sp => new SessionRepository(sp.GetRequiredService<PiableDatabase>()));
+        services.AddSingleton(sp => new PreferenceRepository(sp.GetRequiredService<PiableDatabase>()));
+
+        services.AddSingleton<IConfigService>(sp => new ConfigService(
+            sp.GetRequiredService<ProviderRepository>(),
+            sp.GetRequiredService<AgentRepository>(),
+            sp.GetRequiredService<PreferenceRepository>()));
+
+        services.AddSingleton<ISessionService>(sp => new SessionService(
+            sp.GetRequiredService<SessionRepository>()));
+
+        services.AddSingleton<ITokenCostCalculator>(_ => new TokenCostCalculator());
+        services.AddSingleton<IChatClientFactory>(_ => new ChatClientFactory());
+
+        // 只给"获取模型列表"用；对话走 OpenAI SDK 自带的 HttpClient。
+        // 超时给 30 秒：拉列表是个短请求，不该无限等待。
+        services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
+        services.AddSingleton<IModelListService>(sp => new ModelListService(
+            sp.GetRequiredService<HttpClient>()));
+
+        services.AddSingleton<IAgentOrchestrator>(sp => new AgentOrchestrator(
+            sp.GetRequiredService<IChatClientFactory>()));
+
+        services.AddSingleton(sp => new MainWindowViewModel(
+            sp.GetRequiredService<IConfigService>(),
+            sp.GetRequiredService<ISessionService>(),
+            sp.GetRequiredService<IAgentOrchestrator>(),
+            sp.GetRequiredService<ITokenCostCalculator>(),
+            sp.GetRequiredService<IModelListService>()));
+
+        return services.BuildServiceProvider();
+    }
+
+    private static async Task StartAsync(IServiceProvider services)
+    {
+        try
+        {
+            var paths = services.GetRequiredService<AppPaths>();
+            var database = services.GetRequiredService<PiableDatabase>();
+
+            // 主库打不开时先用备份顶上，再建表
+            await database.RestoreFromBackupIfNeededAsync(paths.BackupPath).ConfigureAwait(true);
+            await database.InitializeAsync().ConfigureAwait(true);
+
+            await services.GetRequiredService<MainWindowViewModel>().InitializeAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            // 启动阶段的异常无处上报，写到日志文件里便于排查
+            TryWriteStartupLog(services, ex);
+        }
+    }
+
+    private static void TryWriteStartupLog(IServiceProvider services, Exception exception)
+    {
+        try
+        {
+            var paths = services.GetRequiredService<AppPaths>();
+            File.AppendAllText(
+                paths.LogPath,
+                $"[{DateTimeOffset.Now:O}] 启动失败：{exception}{Environment.NewLine}{Environment.NewLine}");
+        }
+        catch (Exception)
+        {
+            // 日志都写不进去就只能放弃了
+        }
+    }
+
+    /// <summary>退出前备份数据库（设计文档 6.5）。</summary>
+    private void OnShutdownRequested(object? sender, ShutdownRequestedEventArgs e)
+    {
+        if (_services is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var paths = _services.GetRequiredService<AppPaths>();
+            _services.GetRequiredService<PiableDatabase>().BackupTo(paths.BackupPath);
+        }
+        catch (Exception ex)
+        {
+            TryWriteStartupLog(_services, ex);
+        }
+    }
+
+    /// <summary>
+    /// 按屏幕工作区决定初始窗口尺寸。
+    /// 不能只看 XAML 里写死的 1100×720：那是逻辑像素，在 200% 缩放的屏幕上
+    /// 会变成 2200×1440 物理像素，直接超出屏幕、把右侧和底部挤到可视区域之外。
+    /// </summary>
+    private static void ApplyInitialSize(Window window)
+    {
+        const double preferredWidth = 1100;
+        const double preferredHeight = 720;
+        const double margin = 60;
+
+        var screen = window.Screens.Primary ?? window.Screens.All.FirstOrDefault();
+        if (screen is null)
+        {
+            return;
+        }
+
+        var scaling = screen.Scaling <= 0 ? 1.0 : screen.Scaling;
+        var availableWidth = screen.WorkingArea.Width / scaling - margin;
+        var availableHeight = screen.WorkingArea.Height / scaling - margin;
+
+        window.Width = Math.Max(window.MinWidth, Math.Min(preferredWidth, availableWidth));
+        window.Height = Math.Max(window.MinHeight, Math.Min(preferredHeight, availableHeight));
+        window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+    }
+
+    private static void ApplyTheme(string theme)
+    {
+        if (Current is null)
+        {
+            return;
+        }
+
+        Current.RequestedThemeVariant = theme switch
+        {
+            "Light" => ThemeVariant.Light,
+            "Dark" => ThemeVariant.Dark,
+            _ => ThemeVariant.Default,
+        };
     }
 }

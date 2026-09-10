@@ -105,6 +105,56 @@ public sealed class PiableDatabase
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>同步版本的备份，供应用退出时调用（退出流程不适合 await）。</summary>
+    public void BackupTo(string destinationPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+
+        using var connection = OpenConnection();
+
+        if (File.Exists(destinationPath))
+        {
+            File.Delete(destinationPath);
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = $"VACUUM INTO '{destinationPath.Replace("'", "''")}';";
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 启动自愈（设计文档 6.5）：主库能正常打开就什么都不做；
+    /// 主库缺失或损坏而备份可用时，用备份顶替，避免用户直接丢失全部历史。
+    /// </summary>
+    /// <returns>是否执行了从备份恢复。</returns>
+    public async Task<bool> RestoreFromBackupIfNeededAsync(
+        string backupPath, CancellationToken ct = default)
+    {
+        if (IsReadable(DatabasePath))
+        {
+            return false;
+        }
+
+        if (!IsReadable(backupPath))
+        {
+            // 没有可用备份：交给 InitializeAsync 建一个新库
+            return false;
+        }
+
+        SqliteConnection.ClearAllPools();
+
+        // 损坏的主库先挪到一边而不是直接删掉，万一还有人工抢救的余地
+        if (File.Exists(DatabasePath))
+        {
+            var salvagePath = DatabasePath + ".corrupt";
+            File.Move(DatabasePath, salvagePath, overwrite: true);
+        }
+
+        File.Copy(backupPath, DatabasePath);
+        await InitializeAsync(ct).ConfigureAwait(false);
+        return true;
+    }
+
     /// <summary>检查数据库文件是否可正常打开（用于启动时的备份完整性校验）。</summary>
     public static bool IsReadable(string databasePath)
     {

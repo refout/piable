@@ -27,7 +27,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
     private bool _isConfigView;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LeftPanelWidth))]
     private bool _isLeftPanelCollapsed;
+
+    /// <summary>左侧面板宽度：展开 260、折叠 48（设计文档 3.2）。</summary>
+    public double LeftPanelWidth => IsLeftPanelCollapsed ? 48 : 260;
 
     [ObservableProperty]
     private ChatSessionViewModel? _currentSession;
@@ -112,7 +116,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
             await LoadSessionListAsync(ct).ConfigureAwait(true);
 
             var first = Sessions.FirstOrDefault();
-            if (first is not null)
+            if (first is null)
+            {
+                // 首次启动：直接开一个空会话，否则右侧是一片没有上下文的空白
+                await NewSessionAsync().ConfigureAwait(true);
+            }
+            else
             {
                 SelectedSession = first;
             }
@@ -190,8 +199,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
             return;
         }
 
-        var session = await _sessions.CreateAsync(_provider?.Id, CurrentSession?.SelectedAgent?.Id)
-            .ConfigureAwait(true);
+        // 首次启动时 CurrentSession 还是 null，若直接取它的 SelectedAgent 会得到 null，
+        // 会话就会落库成"没有智能体"，侧边栏随即显示成"已删除"。此处回退到默认智能体。
+        var agentId = CurrentSession?.SelectedAgent?.Id
+                      ?? (await _config.GetDefaultAgentAsync().ConfigureAwait(true))?.Id;
+
+        var session = await _sessions.CreateAsync(_provider?.Id, agentId).ConfigureAwait(true);
 
         var item = CreateSessionItem(new ChatSessionSummary
         {

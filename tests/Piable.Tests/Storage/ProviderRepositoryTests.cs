@@ -46,17 +46,39 @@ public class ProviderRepositoryTests
     }
 
     [Fact]
-    public async Task APIKey以密文落库_数据库文件中不含明文()
+    public async Task APIKey以密文落库_磁盘上任何文件都不含明文()
     {
         await using var workspace = await TestWorkspace.CreateAsync();
         await workspace.Providers.UpsertAsync(NewProvider());
 
-        // 直接读原始库文件，确认明文 Key 没有以任何形式写入磁盘
-        var rawBytes = await File.ReadAllBytesAsync(workspace.Paths.DatabasePath);
-        var rawText = System.Text.Encoding.UTF8.GetString(rawBytes);
+        // 库跑在 WAL 模式下，刚写入的数据可能还在 -wal 里没并回主库文件，
+        // 因此必须把数据目录下的每个文件都翻一遍，只查 piable.db 会漏。
+        var files = Directory.GetFiles(workspace.Root);
+        Assert.NotEmpty(files);
 
+        var combined = new System.Text.StringBuilder();
+        foreach (var file in files)
+        {
+            combined.Append(System.Text.Encoding.UTF8.GetString(await ReadAllowingSharedWriteAsync(file)));
+        }
+
+        var rawText = combined.ToString();
         Assert.DoesNotContain("sk-secret-key-value", rawText);
         Assert.Contains("v1.", rawText);
+    }
+
+    /// <summary>
+    /// SQLite 正持有这些文件的句柄，且共享模式比 File.ReadAllBytes 的默认值宽松，
+    /// 直接读会撞上"文件被另一进程占用"。这里显式放宽容忍度。
+    /// </summary>
+    private static async Task<byte[]> ReadAllowingSharedWriteAsync(string path)
+    {
+        await using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer);
+        return buffer.ToArray();
     }
 
     [Fact]

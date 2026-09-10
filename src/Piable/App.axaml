@@ -1,15 +1,151 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Piable.App"
-             xmlns:local="using:Piable"
              RequestedThemeVariant="Default">
-             <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
 
-    <Application.DataTemplates>
-        <local:ViewLocator />
-    </Application.DataTemplates>
+    <!--
+        不使用模板生成的 ViewLocator：它靠 Type.GetType + Activator.CreateInstance 做反射，
+        与本项目的 AOT 目标冲突。本应用只有一个窗口，内容切换用 IsVisible 控制即可。
+    -->
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- LiveMarkdown 的默认资源（代码块主题、Markdown 元素画刷等）。
+                     缺了它不会报错，但代码块等内容会以看不见的颜色渲染。 -->
+                <ResourceInclude Source="avares://LiveMarkdown.Avalonia/Defaults.axaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <ResourceDictionary.ThemeDictionaries>
+
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="AppBackground" Color="#F5F6F8" />
+                    <SolidColorBrush x:Key="PanelBackground" Color="#EBEDF0" />
+                    <SolidColorBrush x:Key="SurfaceBackground" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="BorderSubtle" Color="#DDE0E4" />
+                    <SolidColorBrush x:Key="TextPrimary" Color="#1B1D1F" />
+                    <SolidColorBrush x:Key="TextSecondary" Color="#61666B" />
+                    <SolidColorBrush x:Key="AccentBrush" Color="#2F6FEB" />
+                    <SolidColorBrush x:Key="AccentText" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="UserBubble" Color="#DCE9FF" />
+                    <SolidColorBrush x:Key="AssistantBubble" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="DangerBrush" Color="#C62828" />
+                    <SolidColorBrush x:Key="DangerText" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="SuccessBrush" Color="#1B7F3B" />
+                    <SolidColorBrush x:Key="HoverOverlay" Color="#14000000" />
+                </ResourceDictionary>
+
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="AppBackground" Color="#1A1C1F" />
+                    <SolidColorBrush x:Key="PanelBackground" Color="#141618" />
+                    <SolidColorBrush x:Key="SurfaceBackground" Color="#232629" />
+                    <SolidColorBrush x:Key="BorderSubtle" Color="#34383C" />
+                    <SolidColorBrush x:Key="TextPrimary" Color="#E8EAED" />
+                    <SolidColorBrush x:Key="TextSecondary" Color="#9AA0A6" />
+                    <SolidColorBrush x:Key="AccentBrush" Color="#5B8DEF" />
+                    <SolidColorBrush x:Key="AccentText" Color="#0B1220" />
+                    <SolidColorBrush x:Key="UserBubble" Color="#2B3A52" />
+                    <SolidColorBrush x:Key="AssistantBubble" Color="#232629" />
+                    <SolidColorBrush x:Key="DangerBrush" Color="#E05252" />
+                    <SolidColorBrush x:Key="DangerText" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="SuccessBrush" Color="#4CAF50" />
+                    <SolidColorBrush x:Key="HoverOverlay" Color="#1AFFFFFF" />
+                </ResourceDictionary>
+
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
 
     <Application.Styles>
         <FluentTheme />
+
+        <!-- 必须注册：没有它，Markdown 的标题、加粗、列表、引用、代码块
+             都会退化成无样式的纯文本，且不会给出任何报错。 -->
+        <StyleInclude Source="avares://LiveMarkdown.Avalonia/Styles.axaml" />
+
+        <!-- 全局文字色：避免每处控件都要显式声明 -->
+        <Style Selector="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+
+        <Style Selector="TextBlock.secondary">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+
+        <!-- 扁平工具按钮：左侧面板与会话操作按钮的统一外观 -->
+        <Style Selector="Button.flat">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+            <Setter Property="Padding" Value="10,7" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+        </Style>
+        <Style Selector="Button.flat:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource HoverOverlay}" />
+        </Style>
+
+        <!-- 主行动按钮 -->
+        <Style Selector="Button.primary">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentText}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+        <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Opacity" Value="0.88" />
+        </Style>
+        <Style Selector="Button.primary:disabled /template/ ContentPresenter">
+            <Setter Property="Opacity" Value="0.45" />
+        </Style>
+
+        <!-- 危险操作：删除确认态 -->
+        <Style Selector="Button.danger">
+            <Setter Property="Background" Value="{DynamicResource DangerBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource DangerText}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="6,2" />
+            <Setter Property="FontSize" Value="11" />
+        </Style>
+
+        <!-- 会话列表项 -->
+        <Style Selector="ListBox.sessionList">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+        </Style>
+        <Style Selector="ListBox.sessionList ListBoxItem">
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="Margin" Value="4,1" />
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+        <Style Selector="ListBox.sessionList ListBoxItem:selected /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Opacity" Value="0.18" />
+        </Style>
+
+        <!-- 卡片容器 -->
+        <Style Selector="Border.card">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="14" />
+        </Style>
+
+        <Style Selector="TextBlock.sectionTitle">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+
+        <Style Selector="TextBlock.fieldLabel">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
     </Application.Styles>
 </Application>

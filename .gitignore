@@ -37,3 +37,8 @@ desktop.ini
 ## NuGet
 *.nupkg
 packages/
+
+## 本地截图产物（tools/ 下的脚本生成）
+/shot.png
+/screen.png
+*.shot*.png
