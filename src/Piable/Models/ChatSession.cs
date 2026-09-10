@@ -12,11 +12,11 @@ public sealed class ChatSession
 
     public List<ChatMessage> Messages { get; set; } = [];
 
-    /// <summary>使用的供应商配置 ID。</summary>
-    public string ProviderId { get; set; } = string.Empty;
+    /// <summary>使用的供应商配置 ID。为 null 表示该供应商已被删除，会话仍可查看但需重选供应商才能续聊。</summary>
+    public string? ProviderId { get; set; }
 
-    /// <summary>使用的智能体 ID。</summary>
-    public string AgentId { get; set; } = string.Empty;
+    /// <summary>使用的智能体 ID。为 null 表示该智能体已被删除，此时以 AgentSnapshot 为准。</summary>
+    public string? AgentId { get; set; }
 
     /// <summary>智能体配置的 JSON 快照，用于历史回放时还原当时的系统提示词与参数。</summary>
     public string? AgentSnapshot { get; set; }
@@ -48,7 +48,8 @@ public sealed class ChatSessionSummary
 {
     public string Id { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
-    public string AgentId { get; set; } = string.Empty;
+    public string? AgentId { get; set; }
+    public string? ProviderId { get; set; }
     public string? ModelUsed { get; set; }
     public int MessageCount { get; set; }
     public long TotalTokens { get; set; }
