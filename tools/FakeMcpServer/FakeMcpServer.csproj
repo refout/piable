@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    一个最小的 MCP stdio 服务端，仅供测试使用。
+
+    存在的意义：MCP 接入最容易出错的一环是 stdio 传输本身——子进程启动、
+    JSON-RPC 握手、工具发现、注解解析。用 mock 掉 IMcpClientService 的方式测，
+    恰好把这一整层绕过去了，测过了也说明不了真实链路可用。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>FakeMcpServer</RootNamespace>
+    <AssemblyName>FakeMcpServer</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

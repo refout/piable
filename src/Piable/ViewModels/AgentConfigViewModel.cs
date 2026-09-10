@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Piable.Models;
 using Piable.Services;
+using Piable.Services.Tools;
 
 namespace Piable.ViewModels;
 
@@ -10,6 +11,7 @@ namespace Piable.ViewModels;
 public sealed partial class AgentConfigViewModel : ViewModelBase
 {
     private readonly IConfigService _config;
+    private readonly ISkillService _skills;
     private readonly IStatusReporter _status;
 
     /// <summary>正在编辑的智能体副本。改动先落在这里，点保存才写库。</summary>
@@ -43,19 +45,46 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
     [ObservableProperty]
     private double _topP = 1.0;
 
+    /// <summary>
+    /// 是否允许执行被标记为危险的工具。
+    /// 默认关闭，需要用户按智能体显式打开（模型可能被提示注入诱导去调用危险工具）。
+    /// </summary>
+    [ObservableProperty]
+    private bool _allowDangerousTools;
+
+    /// <summary>勾选了危险技能但尚未授权时给出提示，避免用户以为它已经在工作。</summary>
+    public bool HasUngrantedDangerousSkill =>
+        !AllowDangerousTools
+        && AvailableSkills.Any(s => s.IsSelected && s.IsDangerous);
+
+    /// <summary>列表为空时界面给出引导文案。用显式布尔属性而非对 Count 取反。</summary>
+    public bool HasAvailableSkills => AvailableSkills.Count > 0;
+
+    public bool HasAvailableMcpServers => AvailableMcpServers.Count > 0;
+
     [ObservableProperty]
     private string _statusMessage = string.Empty;
 
     [ObservableProperty]
     private bool _isStatusError;
 
-    public AgentConfigViewModel(IConfigService config, IStatusReporter status)
+    partial void OnAllowDangerousToolsChanged(bool value) =>
+        OnPropertyChanged(nameof(HasUngrantedDangerousSkill));
+
+    public AgentConfigViewModel(IConfigService config, ISkillService skills, IStatusReporter status)
     {
         _config = config;
+        _skills = skills;
         _status = status;
     }
 
     public ObservableCollection<AgentListItemViewModel> Agents { get; } = [];
+
+    /// <summary>可关联的技能，勾选状态随所选智能体变化。</summary>
+    public ObservableCollection<SelectableLinkViewModel> AvailableSkills { get; } = [];
+
+    /// <summary>可关联的 MCP 服务器。</summary>
+    public ObservableCollection<SelectableLinkViewModel> AvailableMcpServers { get; } = [];
 
     /// <summary>智能体列表发生变化（增删改或改了默认项），主窗口需要重新读取。</summary>
     public event EventHandler? AgentsChanged;
@@ -144,8 +173,78 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
         Temperature = agent.Temperature ?? 0.7;
         MaxTokens = agent.MaxTokens ?? 2048;
         TopP = agent.TopP ?? 1.0;
+        AllowDangerousTools = agent.AllowDangerousTools;
         StatusMessage = string.Empty;
         IsStatusError = false;
+
+        await LoadLinkOptionsAsync(agent).ConfigureAwait(true);
+        OnPropertyChanged(nameof(HasUngrantedDangerousSkill));
+    }
+
+    /// <summary>载入可关联的技能与 MCP 服务器，并按当前智能体的配置勾选。</summary>
+    private async Task LoadLinkOptionsAsync(Agent agent)
+    {
+        DetachLinkHandlers();
+
+        var skillIds = new HashSet<string>(agent.SkillIds, StringComparer.Ordinal);
+        var mcpIds = new HashSet<string>(agent.McpServerIds, StringComparer.Ordinal);
+
+        AvailableSkills.Clear();
+        foreach (var skill in await _skills.GetAllAsync().ConfigureAwait(true))
+        {
+            var handler = SkillHandlers.Find(skill.Handler);
+            AvailableSkills.Add(new SelectableLinkViewModel(
+                skill.Id,
+                skill.Name,
+                skill.Enabled ? handler?.DisplayName ?? skill.Handler : "已停用",
+                handler?.Risk == ToolRisk.Dangerous)
+            {
+                IsSelected = skillIds.Contains(skill.Id),
+            });
+        }
+
+        AvailableMcpServers.Clear();
+        foreach (var server in await _config.GetMcpServersAsync().ConfigureAwait(true))
+        {
+            AvailableMcpServers.Add(new SelectableLinkViewModel(
+                server.Id,
+                server.Name,
+                server.Transport.ToString(),
+                // 未声明只读的 MCP 工具一律按危险处理，这里如实标注
+                isDangerous: true)
+            {
+                IsSelected = mcpIds.Contains(server.Id),
+            });
+        }
+
+        AttachLinkHandlers();
+
+        OnPropertyChanged(nameof(HasAvailableSkills));
+        OnPropertyChanged(nameof(HasAvailableMcpServers));
+    }
+
+    private void AttachLinkHandlers()
+    {
+        foreach (var item in AvailableSkills.Concat(AvailableMcpServers))
+        {
+            item.PropertyChanged += OnLinkSelectionChanged;
+        }
+    }
+
+    private void DetachLinkHandlers()
+    {
+        foreach (var item in AvailableSkills.Concat(AvailableMcpServers))
+        {
+            item.PropertyChanged -= OnLinkSelectionChanged;
+        }
+    }
+
+    private void OnLinkSelectionChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SelectableLinkViewModel.IsSelected))
+        {
+            OnPropertyChanged(nameof(HasUngrantedDangerousSkill));
+        }
     }
 
     [RelayCommand]
@@ -182,6 +281,9 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
         _editing.Name = Name.Trim();
         _editing.Description = string.IsNullOrWhiteSpace(Description) ? null : Description.Trim();
         _editing.SystemPrompt = SystemPrompt;
+        _editing.AllowDangerousTools = AllowDangerousTools;
+        _editing.SkillIds = [.. AvailableSkills.Where(s => s.IsSelected).Select(s => s.Id)];
+        _editing.McpServerIds = [.. AvailableMcpServers.Where(s => s.IsSelected).Select(s => s.Id)];
 
         if (FollowProviderDefaults)
         {

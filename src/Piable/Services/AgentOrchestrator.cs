@@ -1,9 +1,11 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using Microsoft.Extensions.AI;
 using Piable.Models;
+using Piable.Services.Tools;
+using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 // 本文件同时用到两套 ChatMessage：本应用的持久化模型与 Microsoft.Extensions.AI 的传输模型。
 // 用别名区分，避免任何一处裸写 ChatMessage 造成歧义。
-using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using ModelChatMessage = Piable.Models.ChatMessage;
 
 namespace Piable.Services;
@@ -15,11 +17,53 @@ public sealed record ChatUsage(int? PromptTokens, int? CompletionTokens, int? To
     public bool IsEstimated { get; init; }
 }
 
-/// <summary>流式生成过程中的一个片段：要么是文本增量，要么是 usage 汇报。</summary>
+/// <summary>工具调用的结局。</summary>
+public enum ToolInvocationStatus
+{
+    Succeeded,
+    Failed,
+
+    /// <summary>被本地的危险工具策略拒绝，未真正执行。</summary>
+    Denied,
+}
+
+/// <summary>一次工具调用的完整记录，供界面展示与审计。</summary>
+public sealed record ToolInvocationRecord
+{
+    public required string ToolName { get; init; }
+
+    /// <summary>展示用名称（原始工具名，不带服务器前缀）。</summary>
+    public required string DisplayName { get; init; }
+
+    public required string SourceLabel { get; init; }
+
+    public required ToolRisk Risk { get; init; }
+
+    /// <summary>模型给出的参数，已摊平成可读文本。</summary>
+    public required string ArgumentsText { get; init; }
+
+    public required ToolInvocationStatus Status { get; init; }
+
+    /// <summary>回填给模型的文本。</summary>
+    public required string ResultPayload { get; init; }
+
+    /// <summary>第几轮工具调用（从 1 开始）。</summary>
+    public required int Iteration { get; init; }
+
+    public TimeSpan Duration { get; init; }
+}
+
+/// <summary>流式生成过程中的一个片段。</summary>
 public sealed record ChatStreamChunk
 {
+    /// <summary>模型产出的文本增量。</summary>
     public string? TextDelta { get; init; }
+
+    /// <summary>供应商汇报的累计用量（含之前的工具轮次）。</summary>
     public ChatUsage? Usage { get; init; }
+
+    /// <summary>一次工具调用已完成（含被拒绝的情形）。</summary>
+    public ToolInvocationRecord? ToolCall { get; init; }
 }
 
 /// <summary>一次生成请求所需的全部输入。用 record 以便调用方 <c>with</c> 出变体。</summary>
@@ -37,12 +81,21 @@ public sealed record ChatRequest
     public double? Temperature { get; init; }
     public int? MaxTokens { get; init; }
     public double? TopP { get; init; }
+
+    /// <summary>本次可用的工具。为空表示不启用工具调用。</summary>
+    public IReadOnlyList<ToolDescriptor> Tools { get; init; } = [];
+
+    /// <summary>是否允许执行被标记为危险的工具。</summary>
+    public bool AllowDangerousTools { get; init; }
+
+    /// <summary>工具调用的最大轮数，防止模型陷入无限调用。</summary>
+    public int MaxToolRounds { get; init; } = 5;
 }
 
 /// <summary>连接测试的结果。</summary>
 public sealed record ConnectionTestResult(bool Success, string Message);
 
-/// <summary>对话编排：拼装上下文、调用模型、采集统计（设计文档 4.1、7.4）。</summary>
+/// <summary>对话编排：拼装上下文、调用模型、执行工具、采集统计（设计文档 4.1、7.4、8.4）。</summary>
 public interface IAgentOrchestrator
 {
     /// <summary>流式生成。异常由调用方捕获后交给 <see cref="ChatErrorMapper"/> 处理。</summary>
@@ -70,22 +123,85 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         using var client = _factory.Create(request.Provider, model);
 
         var messages = BuildMessages(request);
-        var options = BuildOptions(request);
+        var descriptors = request.Tools.ToDictionary(t => t.Name, StringComparer.Ordinal);
 
-        await foreach (var update in client
-            .GetStreamingResponseAsync(messages, options, ct)
-            .ConfigureAwait(false))
+        var toolsEnabled = request.Tools.Count > 0;
+        var maxRounds = Math.Max(0, request.MaxToolRounds);
+
+        // 累计用量：工具调用会产生多次请求，界面要展示的是这一整轮的总开销
+        var promptTotal = 0;
+        var completionTotal = 0;
+        var hasUsage = false;
+
+        // 轮数用尽后仍要给出回答，因此循环上界是 maxRounds + 1，
+        // 且最后一轮不带工具——模型只能产出文本，不会再把对话悬在半空。
+        for (var iteration = 0; iteration <= (toolsEnabled ? maxRounds : 0); iteration++)
         {
-            var text = update.Text;
-            if (!string.IsNullOrEmpty(text))
+            var allowToolsThisRound = toolsEnabled && iteration < maxRounds;
+            var options = BuildOptions(request, allowToolsThisRound ? request.Tools : null);
+
+            var toolCalls = new List<FunctionCallContent>();
+            var assistantContents = new List<AIContent>();
+
+            await foreach (var update in client
+                .GetStreamingResponseAsync(messages, options, ct)
+                .ConfigureAwait(false))
             {
-                yield return new ChatStreamChunk { TextDelta = text };
+                foreach (var content in update.Contents)
+                {
+                    switch (content)
+                    {
+                        case FunctionCallContent call:
+                            toolCalls.Add(call);
+                            break;
+                        case UsageContent usage:
+                            promptTotal += (int)(usage.Details.InputTokenCount ?? 0);
+                            completionTotal += (int)(usage.Details.OutputTokenCount ?? 0);
+                            hasUsage = true;
+                            break;
+                    }
+                }
+
+                if (update.Contents.Count > 0)
+                {
+                    assistantContents.AddRange(update.Contents);
+                }
+
+                if (!string.IsNullOrEmpty(update.Text))
+                {
+                    yield return new ChatStreamChunk { TextDelta = update.Text };
+                }
             }
 
-            var usage = TryExtractUsage(update);
-            if (usage is not null)
+            if (hasUsage)
             {
-                yield return new ChatStreamChunk { Usage = usage };
+                yield return new ChatStreamChunk
+                {
+                    Usage = new ChatUsage(promptTotal, completionTotal, promptTotal + completionTotal),
+                };
+            }
+
+            if (toolCalls.Count == 0)
+            {
+                yield break;
+            }
+
+            // 带工具调用的助手消息必须先入上下文，否则工具结果会缺少对应的请求
+            messages.Add(new AiChatMessage(ChatRole.Assistant, assistantContents));
+
+            foreach (var call in toolCalls)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var record = await InvokeToolAsync(
+                    call, descriptors, request.AllowDangerousTools, iteration + 1, ct)
+                    .ConfigureAwait(false);
+
+                yield return new ChatStreamChunk { ToolCall = record };
+
+                messages.Add(new AiChatMessage(
+                    ChatRole.Tool,
+                    [new FunctionResultContent(call.CallId, record.ResultPayload)]));
             }
         }
     }
@@ -103,10 +219,7 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         {
             using var client = _factory.Create(provider, resolved);
 
-            var messages = new List<AiChatMessage>
-            {
-                new(ChatRole.User, "ping"),
-            };
+            var messages = new List<AiChatMessage> { new(ChatRole.User, "ping") };
 
             // 只要 1 个 token：目的是验证鉴权与连通性，不是真的取回答
             var options = new ChatOptions { MaxOutputTokens = 1 };
@@ -124,6 +237,140 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             return new ConnectionTestResult(false, message ?? "❌ 连接失败");
         }
     }
+
+    /// <summary>
+    /// 执行一次工具调用。
+    ///
+    /// 任何失败都以"错误结果"回填给模型，而不是向上抛出结束整轮对话——
+    /// 模型看到错误后往往能自行改参数或换工具，直接中断反而让用户拿不到任何回答。
+    /// 唯一的例外是用户主动取消，那必须立刻停下。
+    /// </summary>
+    private static async Task<ToolInvocationRecord> InvokeToolAsync(
+        FunctionCallContent call,
+        IReadOnlyDictionary<string, ToolDescriptor> descriptors,
+        bool allowDangerousTools,
+        int iteration,
+        CancellationToken ct)
+    {
+        var argumentsText = FormatArguments(call.Arguments);
+
+        if (!descriptors.TryGetValue(call.Name, out var descriptor))
+        {
+            // 模型调用了一个未被提供的工具。常见于上一轮的工具列表与这一轮不一致。
+            return new ToolInvocationRecord
+            {
+                ToolName = call.Name,
+                DisplayName = call.Name,
+                SourceLabel = "未知",
+                Risk = ToolRisk.Safe,
+                ArgumentsText = argumentsText,
+                Status = ToolInvocationStatus.Failed,
+                ResultPayload = $"错误：不存在名为 {call.Name} 的工具。",
+                Iteration = iteration,
+            };
+        }
+
+        if (descriptor.Risk == ToolRisk.Dangerous && !allowDangerousTools)
+        {
+            return new ToolInvocationRecord
+            {
+                ToolName = descriptor.Name,
+                DisplayName = descriptor.OriginalName ?? descriptor.Name,
+                SourceLabel = descriptor.SourceLabel,
+                Risk = descriptor.Risk,
+                ArgumentsText = argumentsText,
+                Status = ToolInvocationStatus.Denied,
+                ResultPayload =
+                    "错误：该工具被标记为危险操作，当前智能体未获授权执行。"
+                    + "请在智能体设置中开启「允许执行危险工具」，或改用其他方式完成用户的需求。",
+                Iteration = iteration,
+            };
+        }
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            var arguments = new AIFunctionArguments(
+                call.Arguments ?? new Dictionary<string, object?>());
+
+            var result = descriptor.Tool is AIFunction function
+                ? await function.InvokeAsync(arguments, ct).ConfigureAwait(false)
+                : null;
+
+            started.Stop();
+
+            return new ToolInvocationRecord
+            {
+                ToolName = descriptor.Name,
+                DisplayName = descriptor.OriginalName ?? descriptor.Name,
+                SourceLabel = descriptor.SourceLabel,
+                Risk = descriptor.Risk,
+                ArgumentsText = argumentsText,
+                Status = ToolInvocationStatus.Succeeded,
+                ResultPayload = result?.ToString() ?? "（工具未返回任何内容）",
+                Iteration = iteration,
+                Duration = started.Elapsed,
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            started.Stop();
+
+            return new ToolInvocationRecord
+            {
+                ToolName = descriptor.Name,
+                DisplayName = descriptor.OriginalName ?? descriptor.Name,
+                SourceLabel = descriptor.SourceLabel,
+                Risk = descriptor.Risk,
+                ArgumentsText = argumentsText,
+                Status = ToolInvocationStatus.Failed,
+                ResultPayload = $"错误：{ex.Message}",
+                Iteration = iteration,
+                Duration = started.Elapsed,
+            };
+        }
+    }
+
+    /// <summary>
+    /// 把参数摊平成可读文本。
+    /// 不用 JSON 序列化是因为参数值是 <c>object</c>，走反射序列化在禁用反射的模式下会失败；
+    /// 而且键值对形式在界面上比 JSON 更好读。
+    /// </summary>
+    private static string FormatArguments(IDictionary<string, object?>? arguments)
+    {
+        if (arguments is null || arguments.Count == 0)
+        {
+            return "（无参数）";
+        }
+
+        var builder = new StringBuilder();
+        foreach (var (key, value) in arguments)
+        {
+            if (builder.Length > 0)
+            {
+                builder.Append("，");
+            }
+
+            builder.Append(key).Append('=').Append(Describe(value));
+        }
+
+        return builder.ToString();
+    }
+
+    private static string Describe(object? value) => value switch
+    {
+        null => "null",
+        string s => s,
+        System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.String } e =>
+            e.GetString() ?? string.Empty,
+        System.Text.Json.JsonElement e => e.ToString(),
+        _ => value.ToString() ?? string.Empty,
+    };
 
     private string ResolveModel(ChatRequest request) =>
         string.IsNullOrWhiteSpace(request.Model)
@@ -149,7 +396,7 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         return messages;
     }
 
-    internal static ChatOptions BuildOptions(ChatRequest request)
+    internal static ChatOptions BuildOptions(ChatRequest request, IReadOnlyList<ToolDescriptor>? tools)
     {
         var options = new ChatOptions();
 
@@ -168,6 +415,12 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             options.TopP = (float)topP;
         }
 
+        if (tools is { Count: > 0 })
+        {
+            options.Tools = [.. tools.Select(t => t.Tool)];
+            options.ToolMode = ChatToolMode.Auto;
+        }
+
         return options;
     }
 
@@ -178,30 +431,4 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         MessageRole.Tool => ChatRole.Tool,
         _ => ChatRole.Assistant,
     };
-
-    /// <summary>
-    /// 从流式更新里取出 usage。多数兼容 OpenAI 的供应商只在最后一个 chunk 汇报一次，
-    /// 因此这里返回 null 是常态而非异常。
-    /// </summary>
-    private static ChatUsage? TryExtractUsage(ChatResponseUpdate update)
-    {
-        foreach (var content in update.Contents)
-        {
-            if (content is not UsageContent usageContent)
-            {
-                continue;
-            }
-
-            var details = usageContent.Details;
-            return new ChatUsage(
-                ToInt(details.InputTokenCount),
-                ToInt(details.OutputTokenCount),
-                ToInt(details.TotalTokenCount));
-        }
-
-        return null;
-    }
-
-    private static int? ToInt(long? value) =>
-        value is null ? null : (int)Math.Min(value.Value, int.MaxValue);
 }

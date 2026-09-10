@@ -21,34 +21,30 @@ public class ChatSessionViewModelTests
         MockOpenAiServer server, UserPreferences? preferences = null)
     {
         var workspace = await TestWorkspace.CreateAsync();
-        var config = new ConfigService(workspace.Providers, workspace.Agents, workspace.Preferences);
-        await config.InitializeAsync();
+        var services = TestServices.Create(workspace);
+        await services.InitializeSeedDataAsync();
 
-        var provider = await config.GetOrCreateProviderAsync(ProviderPresets.OpenAi);
+        var provider = await services.Config.GetOrCreateProviderAsync(ProviderPresets.OpenAi);
         provider.Endpoint = server.BaseUrl;
         provider.ApiKey = "sk-test";
         provider.DefaultModel = "gpt-4o-mini";
         provider.InputPricePer1K = 0.0025m;
         provider.OutputPricePer1K = 0.01m;
-        await config.SaveProviderAsync(provider);
+        await services.Config.SaveProviderAsync(provider);
 
-        var sessions = new SessionService(workspace.Sessions);
-        var agents = await config.GetAgentsAsync();
-        var session = await sessions.CreateAsync(provider.Id, ConfigService.GeneralAgentId);
+        var agents = await services.Config.GetAgentsAsync();
+        var session = await services.Sessions.CreateAsync(provider.Id, ConfigService.GeneralAgentId);
 
         var status = new StubStatusReporter();
-        var vm = new ChatSessionViewModel(
-            session,
-            agents,
-            provider,
-            sessions,
-            new AgentOrchestrator(new ChatClientFactory()),
-            new TokenCostCalculator(),
-            preferences ?? new UserPreferences(),
-            status);
+        var vm = services.CreateChatSessionViewModel(
+            session, agents, provider, preferences ?? new UserPreferences(), status);
 
         return new Harness(workspace, vm, status, provider, agents);
     }
+
+    /// <summary>对话流里的消息条目（不含工具调用）。</summary>
+    private static List<MessageViewModel> MessagesOf(ChatSessionViewModel vm) =>
+        [.. vm.Items.OfType<MessageViewModel>()];
 
     [Fact]
     public async Task 一轮完整对话产生用户与助手两条消息()
@@ -61,11 +57,11 @@ public class ChatSessionViewModelTests
         h.ViewModel.InputText = "你好";
         await h.ViewModel.SendCommand.ExecuteAsync(null);
 
-        Assert.Equal(2, h.ViewModel.Messages.Count);
-        Assert.True(h.ViewModel.Messages[0].IsUser);
-        Assert.Equal("你好", h.ViewModel.Messages[0].Content);
-        Assert.True(h.ViewModel.Messages[1].IsAssistant);
-        Assert.Equal("你好！我是 AI。", h.ViewModel.Messages[1].Content);
+        Assert.Equal(2, MessagesOf(h.ViewModel).Count);
+        Assert.True(MessagesOf(h.ViewModel)[0].IsUser);
+        Assert.Equal("你好", MessagesOf(h.ViewModel)[0].Content);
+        Assert.True(MessagesOf(h.ViewModel)[1].IsAssistant);
+        Assert.Equal("你好！我是 AI。", MessagesOf(h.ViewModel)[1].Content);
     }
 
     [Fact]
@@ -99,7 +95,7 @@ public class ChatSessionViewModelTests
         h.ViewModel.InputText = "问题";
         await h.ViewModel.SendCommand.ExecuteAsync(null);
 
-        var assistant = h.ViewModel.Messages[1];
+        var assistant = MessagesOf(h.ViewModel)[1];
         Assert.Equal(1000, assistant.PromptTokens);
         Assert.Equal(2000, assistant.CompletionTokens);
         Assert.Equal(3000, assistant.TotalTokens);
@@ -179,7 +175,7 @@ public class ChatSessionViewModelTests
         h.ViewModel.InputText = "问题";
         await h.ViewModel.SendCommand.ExecuteAsync(null);
 
-        Assert.Empty(h.ViewModel.Messages);
+        Assert.Empty(MessagesOf(h.ViewModel));
         Assert.Contains(h.Status.Errors, e => e.Contains("供应商"));
     }
 
@@ -196,8 +192,8 @@ public class ChatSessionViewModelTests
         await h.ViewModel.SendCommand.ExecuteAsync(null);
 
         // 用户消息保留，失败的空助手消息被撤掉
-        Assert.Single(h.ViewModel.Messages);
-        Assert.True(h.ViewModel.Messages[0].IsUser);
+        Assert.Single(MessagesOf(h.ViewModel));
+        Assert.True(MessagesOf(h.ViewModel)[0].IsUser);
         Assert.Contains(h.Status.Errors, e => e.Contains("API Key"));
     }
 

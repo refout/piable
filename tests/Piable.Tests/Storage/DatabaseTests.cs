@@ -44,6 +44,22 @@ public class DatabaseTests
     }
 
     [Fact]
+    public async Task 新库初始化后版本号已写回()
+    {
+        // 回归点：曾出现过迁移跑完但版本号没落盘的情况，
+        // 于是每次启动都重跑一遍迁移，而 ALTER TABLE ADD COLUMN 第二次会因列已存在而失败。
+        await using var workspace = await TestWorkspace.CreateAsync();
+
+        await using var connection = await workspace.Database.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA user_version;";
+
+        Assert.Equal(
+            (long)PiableDatabase.CurrentSchemaVersion,
+            (long)(await command.ExecuteScalarAsync())!);
+    }
+
+    [Fact]
     public async Task 启用WAL模式()
     {
         await using var workspace = await TestWorkspace.CreateAsync();

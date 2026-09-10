@@ -8,7 +8,14 @@ public sealed class SkillDefinition
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("n");
 
+    /// <summary>界面显示名称，可以是中文。</summary>
     public string Name { get; set; } = "新技能";
+
+    /// <summary>
+    /// 提供给模型的工具名。必须匹配 <c>^[a-zA-Z0-9_-]{1,64}$</c>——
+    /// OpenAI 兼容接口对函数名有此限制，中文名称会被供应商直接拒绝。
+    /// </summary>
+    public string ToolName { get; set; } = string.Empty;
 
     /// <summary>技能描述，会作为工具说明提供给模型。</summary>
     public string Description { get; set; } = string.Empty;

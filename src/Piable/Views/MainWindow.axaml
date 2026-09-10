@@ -2,13 +2,14 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Piable.ViewModels"
         xmlns:models="using:Piable.Models"
+        xmlns:tools="using:Piable.Services.Tools"
         xmlns:lm="using:LiveMarkdown.Avalonia"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="720"
         x:Class="Piable.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Icon="/Assets/avalonia-logo.ico"
+        Icon="/Assets/logo.png"
         Width="1100" Height="720"
         MinWidth="760" MinHeight="480"
         Background="{DynamicResource AppBackground}"
@@ -60,6 +61,31 @@
         </Style>
         <Style Selector="Button.rowDelete:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource HoverOverlay}" />
+        </Style>
+
+        <!-- 工具调用：整块左对齐，用左侧色条区分危险与被拒 -->
+        <Style Selector="Border.toolCall">
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="MaxWidth" Value="720" />
+            <Setter Property="Margin" Value="0,6" />
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Background" Value="{DynamicResource SurfaceBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="3,1,1,1" />
+        </Style>
+        <Style Selector="Border.toolCall.dangerous">
+            <Setter Property="BorderBrush" Value="{DynamicResource DangerBrush}" />
+        </Style>
+        <Style Selector="Border.toolCall.denied">
+            <Setter Property="Opacity" Value="0.7" />
+        </Style>
+
+        <Style Selector="Border.toolResult">
+            <Setter Property="Background" Value="{DynamicResource PanelBackground}" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="8,6" />
+            <Setter Property="MaxHeight" Value="260" />
         </Style>
     </Window.Styles>
 
@@ -168,9 +194,11 @@
                     <ScrollViewer Grid.Row="1" Name="MessageScrollViewer"
                                   Padding="18,12"
                                   HorizontalScrollBarVisibility="Disabled">
-                        <ItemsControl ItemsSource="{Binding CurrentSession.Messages}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:MessageViewModel">
+                        <!-- 消息与工具调用混排，按条目类型分派模板 -->
+                        <ItemsControl ItemsSource="{Binding CurrentSession.Items}">
+                            <ItemsControl.DataTemplates>
+
+                                <DataTemplate DataType="vm:MessageViewModel">
                                     <Border Classes="bubble"
                                             Classes.user="{Binding IsUser}"
                                             Classes.assistant="{Binding IsAssistant}">
@@ -194,7 +222,42 @@
                                         </StackPanel>
                                     </Border>
                                 </DataTemplate>
-                            </ItemsControl.ItemTemplate>
+
+                                <DataTemplate DataType="vm:ToolCallViewModel">
+                                    <Border Classes="toolCall"
+                                            Classes.dangerous="{Binding IsDangerous}"
+                                            Classes.denied="{Binding IsDenied}">
+                                        <StackPanel Spacing="5">
+                                            <Grid ColumnDefinitions="*,Auto">
+                                                <TextBlock Grid.Column="0"
+                                                           Text="{Binding Summary}"
+                                                           FontWeight="SemiBold"
+                                                           TextWrapping="Wrap" />
+                                                <TextBlock Grid.Column="1"
+                                                           Classes="secondary"
+                                                           VerticalAlignment="Top"
+                                                           Text="{Binding DurationText}"
+                                                           IsVisible="{Binding HasDuration}" />
+                                            </Grid>
+
+                                            <TextBlock Classes="secondary" Text="{Binding SourceLabel}" />
+
+                                            <Border Classes="toolResult">
+                                                <SelectableTextBlock Text="{Binding ResultText}"
+                                                                     TextWrapping="Wrap"
+                                                                     FontFamily="Cascadia Mono,Consolas,monospace"
+                                                                     FontSize="12" />
+                                            </Border>
+
+                                            <Button Classes="stats"
+                                                    Content="展开完整结果"
+                                                    Command="{Binding ToggleExpandCommand}"
+                                                    IsVisible="{Binding IsTruncatable}" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+
+                            </ItemsControl.DataTemplates>
                         </ItemsControl>
                     </ScrollViewer>
 
@@ -536,11 +599,64 @@
                                             </Grid>
                                         </StackPanel>
 
-                                        <Border Classes="card" Padding="12,8">
-                                            <StackPanel Spacing="2">
-                                                <TextBlock Classes="sectionTitle" Text="MCP 服务器与技能" />
+                                        <Border Classes="card" Padding="12,10">
+                                            <StackPanel Spacing="6">
+                                                <TextBlock Classes="sectionTitle" Text="技能" />
                                                 <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                           Text="MCP 客户端与技能执行将在下一阶段实现，当前版本对话不携带外部工具。" />
+                                                           Text="勾选后该智能体可使用这些工具。带 ⚠️ 的技能需要另外开启下方授权。" />
+                                                <ItemsControl ItemsSource="{Binding AgentConfig.AvailableSkills}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate DataType="vm:SelectableLinkViewModel">
+                                                            <CheckBox IsChecked="{Binding IsSelected}">
+                                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                    <TextBlock Text="{Binding Name}" />
+                                                                    <TextBlock Text="⚠️" Foreground="{DynamicResource DangerBrush}"
+                                                                               IsVisible="{Binding IsDangerous}" />
+                                                                    <TextBlock Classes="secondary" Text="{Binding Detail}" />
+                                                                </StackPanel>
+                                                            </CheckBox>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <TextBlock Classes="secondary"
+                                                           Text="尚未配置任何技能，请到「技能」标签页添加。"
+                                                           IsVisible="{Binding !AgentConfig.HasAvailableSkills}" />
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Border Classes="card" Padding="12,10">
+                                            <StackPanel Spacing="6">
+                                                <TextBlock Classes="sectionTitle" Text="MCP 服务器" />
+                                                <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                           Text="MCP 工具的风险等级由服务端声明决定，未声明只读的一律按危险处理。" />
+                                                <ItemsControl ItemsSource="{Binding AgentConfig.AvailableMcpServers}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate DataType="vm:SelectableLinkViewModel">
+                                                            <CheckBox IsChecked="{Binding IsSelected}">
+                                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                    <TextBlock Text="{Binding Name}" />
+                                                                    <TextBlock Classes="secondary" Text="{Binding Detail}" />
+                                                                </StackPanel>
+                                                            </CheckBox>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <TextBlock Classes="secondary"
+                                                           Text="尚未配置任何 MCP 服务器，请到「MCP 服务器」标签页添加。"
+                                                           IsVisible="{Binding !AgentConfig.HasAvailableMcpServers}" />
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Border Classes="card" Padding="12,10">
+                                            <StackPanel Spacing="6">
+                                                <CheckBox Content="允许执行危险工具"
+                                                          IsChecked="{Binding AgentConfig.AllowDangerousTools}" />
+                                                <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                           Text="关闭时，模型请求危险工具会被拒绝并把拒绝原因回传给它。模型可能被对话内容或工具返回值中的提示注入诱导，开启前请确认该智能体接触的内容是可信的。" />
+                                                <TextBlock Foreground="{DynamicResource DangerBrush}"
+                                                           TextWrapping="Wrap"
+                                                           Text="⚠️ 已勾选危险技能但未授权，它们当前不会执行。"
+                                                           IsVisible="{Binding AgentConfig.HasUngrantedDangerousSkill}" />
                                             </StackPanel>
                                         </Border>
 
@@ -555,6 +671,209 @@
 
                                         <TextBlock Text="{Binding AgentConfig.StatusMessage}"
                                                    TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="技能">
+                            <Grid ColumnDefinitions="260,*" Margin="8">
+
+                                <StackPanel Grid.Column="0" Spacing="8">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Classes="sectionTitle" Text="🧩 技能"
+                                                   VerticalAlignment="Center" />
+                                        <Button Grid.Column="1" Content="+ 新建"
+                                                Command="{Binding SkillConfig.NewSkillCommand}" />
+                                    </Grid>
+
+                                    <ListBox ItemsSource="{Binding SkillConfig.Skills}"
+                                             SelectedItem="{Binding SkillConfig.SelectedSkill}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate DataType="vm:SkillListItemViewModel">
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <StackPanel Grid.Column="0" Spacing="2">
+                                                        <TextBlock Text="{Binding DisplayName}"
+                                                                   FontWeight="SemiBold"
+                                                                   TextWrapping="Wrap" />
+                                                        <TextBlock Text="{Binding Subtitle}"
+                                                                   Classes="secondary"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                    </StackPanel>
+                                                    <Panel Grid.Column="1">
+                                                        <Button Classes="rowDelete" Content="✕"
+                                                                IsVisible="{Binding !IsConfirmingDelete}"
+                                                                Command="{Binding RequestDeleteCommand}" />
+                                                        <Button Classes="danger" Content="确认删除？"
+                                                                IsVisible="{Binding IsConfirmingDelete}"
+                                                                Command="{Binding RequestDeleteCommand}" />
+                                                    </Panel>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </StackPanel>
+
+                                <ScrollViewer Grid.Column="1" Margin="12,0,0,0">
+                                    <StackPanel Spacing="8" MaxWidth="640"
+                                                HorizontalAlignment="Left">
+
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Classes="sectionTitle" Text="本地实现" />
+                                            <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                       Text="技能的动作只能来自程序内置的实现，不能由配置任意指定脚本。" />
+                                            <ComboBox ItemsSource="{Binding SkillConfig.AvailableHandlers}"
+                                                      SelectedItem="{Binding SkillConfig.SelectedHandler}"
+                                                      MinWidth="280">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate DataType="tools:ISkillHandler">
+                                                        <TextBlock Text="{Binding DisplayName}" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                            <TextBlock Text="{Binding SkillConfig.HandlerRiskHint}"
+                                                       TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource TextSecondary}" />
+                                        </StackPanel>
+
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Classes="sectionTitle" Text="名称" />
+                                            <TextBox Text="{Binding SkillConfig.Name}"
+                                                     PlaceholderText="显示名称，可用中文" />
+                                        </StackPanel>
+
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Classes="sectionTitle" Text="工具名" />
+                                            <TextBox Text="{Binding SkillConfig.ToolName}"
+                                                     PlaceholderText="run_shell" />
+                                            <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                       Text="提供给模型的函数名，只能包含字母、数字、下划线和连字符，且必须以字母开头。" />
+                                        </StackPanel>
+
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Classes="sectionTitle" Text="描述" />
+                                            <TextBox Text="{Binding SkillConfig.Description}"
+                                                     AcceptsReturn="True" TextWrapping="Wrap" Height="90" />
+                                            <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                       Text="这段文字会作为工具说明提供给模型，写清楚何时该用它。" />
+                                        </StackPanel>
+
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Classes="sectionTitle" Text="参数结构（JSON Schema）" />
+                                            <TextBox Text="{Binding SkillConfig.ToolSpec}"
+                                                     AcceptsReturn="True" TextWrapping="NoWrap"
+                                                     FontFamily="Cascadia Mono,Consolas,monospace"
+                                                     FontSize="12" Height="200" />
+                                        </StackPanel>
+
+                                        <CheckBox Content="启用" IsChecked="{Binding SkillConfig.IsEnabled}" />
+
+                                        <Button Classes="primary" Content="💾 保存"
+                                                HorizontalAlignment="Left"
+                                                Command="{Binding SkillConfig.SaveCommand}" />
+
+                                        <TextBlock Text="{Binding SkillConfig.StatusMessage}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="MCP 服务器">
+                            <Grid ColumnDefinitions="260,*" Margin="8">
+
+                                <StackPanel Grid.Column="0" Spacing="8">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Classes="sectionTitle" Text="🔌 MCP 服务器"
+                                                   VerticalAlignment="Center" />
+                                        <Button Grid.Column="1" Content="+ 新建"
+                                                Command="{Binding McpConfig.NewServerCommand}" />
+                                    </Grid>
+
+                                    <ListBox ItemsSource="{Binding McpConfig.Servers}"
+                                             SelectedItem="{Binding McpConfig.SelectedServer}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate DataType="vm:McpServerListItemViewModel">
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <StackPanel Grid.Column="0" Spacing="2">
+                                                        <TextBlock Text="{Binding DisplayName}"
+                                                                   FontWeight="SemiBold"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Text="{Binding Subtitle}"
+                                                                   Classes="secondary"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                    </StackPanel>
+                                                    <Panel Grid.Column="1">
+                                                        <Button Classes="rowDelete" Content="✕"
+                                                                IsVisible="{Binding !IsConfirmingDelete}"
+                                                                Command="{Binding RequestDeleteCommand}" />
+                                                        <Button Classes="danger" Content="确认删除？"
+                                                                IsVisible="{Binding IsConfirmingDelete}"
+                                                                Command="{Binding RequestDeleteCommand}" />
+                                                    </Panel>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </StackPanel>
+
+                                <ScrollViewer Grid.Column="1" Margin="12,0,0,0">
+                                    <StackPanel Spacing="8" MaxWidth="640"
+                                                HorizontalAlignment="Left">
+
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Classes="sectionTitle" Text="名称" />
+                                            <TextBox Text="{Binding McpConfig.Name}" />
+                                        </StackPanel>
+
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Classes="sectionTitle" Text="传输方式" />
+                                            <ComboBox ItemsSource="{Binding McpConfig.AvailableTransports}"
+                                                      SelectedItem="{Binding McpConfig.Transport}"
+                                                      MinWidth="220" />
+                                        </StackPanel>
+
+                                        <StackPanel Spacing="4" IsVisible="{Binding McpConfig.IsStdio}">
+                                            <TextBlock Classes="sectionTitle" Text="启动命令" />
+                                            <TextBox Text="{Binding McpConfig.Command}"
+                                                     PlaceholderText="npx" />
+                                            <TextBlock Classes="sectionTitle" Text="参数（每行一个）" />
+                                            <TextBox Text="{Binding McpConfig.ArgumentsText}"
+                                                     AcceptsReturn="True" TextWrapping="NoWrap"
+                                                     FontFamily="Cascadia Mono,Consolas,monospace"
+                                                     FontSize="12" Height="110"
+                                                     PlaceholderText="-y&#x0a;@modelcontextprotocol/server-filesystem&#x0a;C:\some\path" />
+                                        </StackPanel>
+
+                                        <StackPanel Spacing="4" IsVisible="{Binding McpConfig.IsHttpTransport}">
+                                            <TextBlock Classes="sectionTitle" Text="URL" />
+                                            <TextBox Text="{Binding McpConfig.Url}"
+                                                     PlaceholderText="https://example.com/mcp" />
+                                            <TextBlock Classes="sectionTitle" Text="请求头（每行一个 键=值）" />
+                                            <TextBox Text="{Binding McpConfig.HeadersText}"
+                                                     AcceptsReturn="True" TextWrapping="NoWrap"
+                                                     FontFamily="Cascadia Mono,Consolas,monospace"
+                                                     FontSize="12" Height="90"
+                                                     PlaceholderText="Authorization=Bearer xxx" />
+                                        </StackPanel>
+
+                                        <CheckBox Content="启用" IsChecked="{Binding McpConfig.IsEnabled}" />
+
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Button Classes="primary" Content="💾 保存"
+                                                    Command="{Binding McpConfig.SaveCommand}" />
+                                            <Button Content="测试连接"
+                                                    IsEnabled="{Binding !McpConfig.IsBusy}"
+                                                    Command="{Binding McpConfig.TestConnectionCommand}" />
+                                        </StackPanel>
+
+                                        <TextBlock Text="{Binding McpConfig.StatusMessage}"
+                                                   TextWrapping="Wrap" />
+
+                                        <Border Classes="card" Padding="12,10">
+                                            <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                       Text="连接在首次对话时按需建立。变更配置后旧连接会作废，下次对话重新连接。" />
+                                        </Border>
                                     </StackPanel>
                                 </ScrollViewer>
                             </Grid>

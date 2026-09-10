@@ -6,7 +6,7 @@ namespace Piable.Tests.Services;
 public class ConfigServiceTests
 {
     private static ConfigService Create(TestWorkspace workspace) =>
-        new(workspace.Providers, workspace.Agents, workspace.Preferences);
+        TestServices.Create(workspace).Config;
 
     [Fact]
     public async Task 首次初始化写入两个内置智能体()

@@ -1,19 +1,22 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Piable.Models;
 using Piable.Services;
+using Piable.Services.Tools;
 
 namespace Piable.ViewModels;
 
 /// <summary>
-/// 单个会话的交互逻辑：消息列表、流式生成、中断控制、统计汇总。
+/// 单个会话的交互逻辑：消息与工具调用列表、流式生成、中断控制、统计汇总。
 /// </summary>
 public sealed partial class ChatSessionViewModel : ViewModelBase
 {
     private readonly ISessionService _sessions;
     private readonly IAgentOrchestrator _orchestrator;
+    private readonly IToolCatalog _toolCatalog;
     private readonly ITokenCostCalculator _calculator;
     private readonly UserPreferences _preferences;
     private readonly IStatusReporter _status;
@@ -53,6 +56,7 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
         ProviderConfig? provider,
         ISessionService sessions,
         IAgentOrchestrator orchestrator,
+        IToolCatalog toolCatalog,
         ITokenCostCalculator calculator,
         UserPreferences preferences,
         IStatusReporter status)
@@ -62,6 +66,7 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
         Provider = provider;
         _sessions = sessions;
         _orchestrator = orchestrator;
+        _toolCatalog = toolCatalog;
         _calculator = calculator;
         _preferences = preferences;
         _status = status;
@@ -73,13 +78,14 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
 
         foreach (var message in session.Messages)
         {
-            Messages.Add(new MessageViewModel(message, _calculator, _preferences));
+            Items.Add(CreateItem(message));
         }
     }
 
     public ChatSession Session { get; }
 
-    public ObservableCollection<MessageViewModel> Messages { get; } = [];
+    /// <summary>对话流。消息与工具调用按发生顺序混排。</summary>
+    public ObservableCollection<ChatItemViewModel> Items { get; } = [];
 
     public IReadOnlyList<Agent> AvailableAgents { get; }
 
@@ -94,11 +100,12 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
     {
         get
         {
-            var tokens = Messages.Sum(m => (long)(m.TotalTokens ?? 0));
-            var duration = Messages.Sum(m => m.DurationMs ?? 0);
+            var messages = Items.OfType<MessageViewModel>().ToList();
+            var tokens = messages.Sum(m => (long)(m.TotalTokens ?? 0));
+            var duration = messages.Sum(m => m.DurationMs ?? 0);
             var agent = SelectedAgent?.Name ?? "未选择智能体";
 
-            return $"💬 {Messages.Count}条 · 🔢 {_calculator.FormatTokens(tokens)}"
+            return $"💬 {messages.Count}条 · 🔢 {_calculator.FormatTokens(tokens)}"
                    + $" · ⏱ {_calculator.FormatDuration(duration)} · 🤖 {agent}";
         }
     }
@@ -160,37 +167,29 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
 
     private async Task RunTurnAsync(string text, Agent agent, string model)
     {
-        var wasFirstMessage = Session.Messages.Count == 0;
+        var isFirstMessage = Session.Messages.Count == 0;
 
-        // ---- 用户消息：立即落库，避免异常时丢失用户输入 ----
+        // ---- 用户消息：立即落库，避免后续异常时丢失用户输入 ----
         var userMessage = new ChatMessage { Role = MessageRole.User, Content = text };
         Session.Messages.Add(userMessage);
-        Messages.Add(new MessageViewModel(userMessage, _calculator, _preferences));
+        Items.Add(new MessageViewModel(userMessage, _calculator, _preferences));
         await _sessions.AppendMessageAsync(Session.Id, userMessage).ConfigureAwait(true);
 
-        if (wasFirstMessage)
+        if (isFirstMessage)
         {
             await _sessions.RenameFromFirstMessageAsync(Session, text).ConfigureAwait(true);
             TitleChanged?.Invoke(this, EventArgs.Empty);
             OnPropertyChanged(nameof(Title));
         }
 
-        // 历史在加入助手占位消息之前取，否则请求里会多出一条空助手消息
+        // 历史在加入本轮新消息之前取，否则请求里会混进还没发生的助手回复
         var history = Session.Messages.ToList();
 
-        // ---- 助手占位消息 ----
-        var assistantMessage = new ChatMessage
-        {
-            Role = MessageRole.Assistant,
-            Content = string.Empty,
-            StartTime = DateTimeOffset.Now,
-            ModelUsed = model,
-        };
-        var assistantView = new MessageViewModel(assistantMessage, _calculator, _preferences);
-        Messages.Add(assistantView);
-        ScrollToEndRequested?.Invoke(this, EventArgs.Empty);
+        _generationCts = new CancellationTokenSource(
+            TimeSpan.FromSeconds(Math.Max(1, _preferences.RequestTimeoutSeconds)));
 
-        // ---- 流式生成 ----
+        var tools = await ResolveToolsAsync(agent).ConfigureAwait(true);
+
         var request = new ChatRequest
         {
             Provider = Provider!,
@@ -200,24 +199,72 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
             Temperature = Temperature,
             MaxTokens = MaxTokens,
             TopP = TopP,
+            Tools = tools,
+            AllowDangerousTools = agent.AllowDangerousTools,
+            MaxToolRounds = _preferences.MaxToolRounds,
         };
 
-        _generationCts = new CancellationTokenSource(
-            TimeSpan.FromSeconds(Math.Max(1, _preferences.RequestTimeoutSeconds)));
+        var outcome = await ConsumeStreamAsync(request, model).ConfigureAwait(true);
 
+        var cost = _calculator.CalculateCost(
+            outcome.Usage?.PromptTokens,
+            outcome.Usage?.CompletionTokens,
+            Provider!.InputPricePer1K,
+            Provider.OutputPricePer1K);
+
+        ApplyTurnStatistics(outcome, cost, model);
+
+        Session.ModelUsed = model;
+        Session.AgentSnapshot = SessionService.CreateAgentSnapshot(agent);
+        Session.UpdatedAt = DateTimeOffset.Now;
+        await _sessions.SaveMetadataAsync(Session, CancellationToken.None).ConfigureAwait(true);
+
+        ScrollToEndRequested?.Invoke(this, EventArgs.Empty);
+        TurnCompleted?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>本轮生成的结果汇总。</summary>
+    private sealed record TurnOutcome(ChatUsage? Usage, TimeSpan Duration, bool Interrupted);
+
+    /// <summary>
+    /// 消费流式结果，边收边渲染，并在每条消息"封口"时立刻落库。
+    /// 逐条落库而非攒到最后统一写，是为了让崩溃或强制退出最多只损失正在生成的那一条。
+    /// </summary>
+    private async Task<TurnOutcome> ConsumeStreamAsync(ChatRequest request, string model)
+    {
         ChatUsage? usage = null;
+
+        // 当前正在增长的助手消息。遇到工具调用就"封口"，工具之后的文本会开启
+        // 一条新的助手消息——这样重新加载历史时顺序依然正确。
+        MessageViewModel? current = null;
+        ChatMessage? currentModel = null;
+
         var stopwatch = Stopwatch.StartNew();
         var interrupted = false;
 
         try
         {
             await foreach (var chunk in _orchestrator
-                .StreamAsync(request, _generationCts.Token)
+                .StreamAsync(request, _generationCts!.Token)
                 .ConfigureAwait(true))
             {
                 if (chunk.TextDelta is not null)
                 {
-                    assistantView.AppendText(chunk.TextDelta);
+                    if (current is null)
+                    {
+                        currentModel = new ChatMessage
+                        {
+                            Role = MessageRole.Assistant,
+                            Content = string.Empty,
+                            StartTime = DateTimeOffset.Now,
+                            ModelUsed = model,
+                        };
+                        current = new MessageViewModel(currentModel, _calculator, _preferences);
+                        Items.Add(current);
+                    }
+
+                    current.AppendText(chunk.TextDelta);
+
                     if (IsActive)
                     {
                         ScrollToEndRequested?.Invoke(this, EventArgs.Empty);
@@ -227,6 +274,16 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
                 if (chunk.Usage is not null)
                 {
                     usage = chunk.Usage;
+                }
+
+                if (chunk.ToolCall is not null)
+                {
+                    await CloseAssistantAsync(currentModel, current).ConfigureAwait(true);
+                    current = null;
+                    currentModel = null;
+
+                    await AppendToolCallAsync(chunk.ToolCall).ConfigureAwait(true);
+                    ScrollToEndRequested?.Invoke(this, EventArgs.Empty);
                 }
             }
         }
@@ -254,42 +311,122 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
             stopwatch.Stop();
         }
 
-        var hasContent = assistantMessage.Content.Length > 0;
+        await CloseAssistantAsync(currentModel, current, interrupted).ConfigureAwait(true);
 
-        // 请求彻底失败且没吐出任何内容：撤掉这个空气泡，不要让历史里留下空消息
-        if (interrupted && !hasContent)
+        return new TurnOutcome(usage, stopwatch.Elapsed, interrupted);
+    }
+
+    /// <summary>
+    /// 收尾一条助手消息：按需补上中断标记，写入历史并落库。
+    /// 内容为空的（模型直接请求工具、或请求彻底失败）不落库，避免历史里留下空消息。
+    /// </summary>
+    private async Task CloseAssistantAsync(
+        ChatMessage? model, MessageViewModel? view, bool interrupted = false)
+    {
+        if (model is null || view is null)
         {
-            Messages.Remove(assistantView);
             return;
         }
 
-        var cost = _calculator.CalculateCost(
-            usage?.PromptTokens,
-            usage?.CompletionTokens,
-            Provider!.InputPricePer1K,
-            Provider.OutputPricePer1K);
-
-        assistantView.ApplyStatistics(stopwatch.Elapsed, usage, cost, model, interrupted);
+        if (model.Content.Length == 0)
+        {
+            Items.Remove(view);
+            return;
+        }
 
         if (interrupted)
         {
-            // 设计文档 4.2：在末尾标记已中断。
-            // AppendText 直接改的就是 assistantMessage.Content（同一个对象）。
-            assistantView.AppendText("\n\n*[已中断]*");
+            // 设计文档 4.2：在末尾标记已中断
+            view.AppendText("\n\n*[已中断]*");
         }
 
-        Session.ModelUsed = model;
-        Session.AgentSnapshot = SessionService.CreateAgentSnapshot(agent);
-        Session.Messages.Add(assistantMessage);
+        Session.Messages.Add(model);
+        await _sessions.AppendMessageAsync(Session.Id, model).ConfigureAwait(true);
+    }
 
-        // 后台会话的 UpdatedAt 由落库时刷新；这里同步内存态，供侧边栏排序
-        Session.UpdatedAt = DateTimeOffset.Now;
+    private async Task AppendToolCallAsync(ToolInvocationRecord record)
+    {
+        var payload = ToolCallViewModel.ToPayload(record);
+        var message = new ChatMessage
+        {
+            Role = MessageRole.Tool,
+            Content = JsonSerializer.Serialize(payload, PiableJsonContext.Default.ToolCallPayload),
+        };
 
-        await _sessions.AppendMessageAsync(Session.Id, assistantMessage).ConfigureAwait(true);
-        await _sessions.SaveMetadataAsync(Session, CancellationToken.None).ConfigureAwait(true);
+        Session.Messages.Add(message);
+        Items.Add(new ToolCallViewModel(payload, _preferences));
 
-        ScrollToEndRequested?.Invoke(this, EventArgs.Empty);
-        TurnCompleted?.Invoke(this, EventArgs.Empty);
+        await _sessions.AppendMessageAsync(Session.Id, message).ConfigureAwait(true);
+    }
+
+    /// <summary>把本轮统计写到最后一个助手消息上。</summary>
+    private void ApplyTurnStatistics(TurnOutcome outcome, decimal? cost, string model)
+    {
+        var lastAssistant = Items.OfType<MessageViewModel>().LastOrDefault(m => m.IsAssistant);
+
+        lastAssistant?.ApplyStatistics(
+            outcome.Duration, outcome.Usage, cost, model, outcome.Interrupted);
+    }
+
+    /// <summary>把历史上的一条消息还原成对应的展示模型。</summary>
+    private ChatItemViewModel CreateItem(ChatMessage message)
+    {
+        if (message.Role != MessageRole.Tool)
+        {
+            return new MessageViewModel(message, _calculator, _preferences);
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Deserialize(
+                message.Content, PiableJsonContext.Default.ToolCallPayload);
+
+            if (payload is not null)
+            {
+                return new ToolCallViewModel(payload, _preferences);
+            }
+        }
+        catch (JsonException)
+        {
+            // 数据损坏时退化成一个普通消息条目，总好过整段历史加载不出来
+        }
+
+        return new MessageViewModel(message, _calculator, _preferences);
+    }
+
+    /// <summary>
+    /// 解析本轮可用的工具。工具发现失败不应阻断对话——
+    /// 拿不到工具就当作没有工具继续，把原因报到状态栏。
+    /// </summary>
+    private async Task<IReadOnlyList<ToolDescriptor>> ResolveToolsAsync(Agent agent)
+    {
+        if (!agent.HasTools)
+        {
+            return [];
+        }
+
+        try
+        {
+            var resolution = await _toolCatalog
+                .ResolveAsync(agent, _generationCts!.Token)
+                .ConfigureAwait(true);
+
+            foreach (var warning in resolution.Warnings)
+            {
+                _status.ReportError(warning);
+            }
+
+            return resolution.Tools;
+        }
+        catch (OperationCanceledException)
+        {
+            return [];
+        }
+        catch (Exception ex)
+        {
+            _status.ReportError($"⚠️ 工具加载失败，本轮以无工具方式继续：{ex.Message}");
+            return [];
+        }
     }
 
     private string ResolveModel(Agent agent)
@@ -341,7 +478,7 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
     /// <summary>偏好变化后刷新统计显示。</summary>
     public void RefreshStatistics()
     {
-        foreach (var message in Messages)
+        foreach (var message in Items.OfType<MessageViewModel>())
         {
             message.RefreshStatistics();
         }

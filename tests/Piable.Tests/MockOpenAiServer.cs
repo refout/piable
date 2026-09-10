@@ -32,6 +32,18 @@ internal sealed class MockOpenAiServer : IAsyncDisposable
     /// <summary>服务端会返回的 SSE 响应体。测试可替换为任意内容。</summary>
     public string SseBody { get; set; } = string.Empty;
 
+    /// <summary>按顺序返回的响应队列。队列耗尽后回落到 <see cref="SseBody"/>。</summary>
+    private readonly Queue<string> _queuedResponses = new();
+
+    /// <summary>入队一个响应。用于需要多轮往返的场景（例如先请求工具、再给出最终回答）。</summary>
+    public void EnqueueResponse(string sseBody)
+    {
+        lock (_gate)
+        {
+            _queuedResponses.Enqueue(sseBody);
+        }
+    }
+
     /// <summary>
     /// 非流式响应体。设为非 null 时按 application/json 返回。
     /// 流式调用与"测试连接"这类一次性调用期望的响应格式不同，需要分别构造。
@@ -129,7 +141,13 @@ internal sealed class MockOpenAiServer : IAsyncDisposable
         context.Response.ContentType = isJson ? "application/json" : "text/event-stream";
         context.Response.Headers["Cache-Control"] = "no-cache";
 
-        var payload = Encoding.UTF8.GetBytes(isJson ? JsonBody! : SseBody);
+        string responseBody;
+        lock (_gate)
+        {
+            responseBody = _queuedResponses.Count > 0 ? _queuedResponses.Dequeue() : SseBody;
+        }
+
+        var payload = Encoding.UTF8.GetBytes(isJson ? JsonBody! : responseBody);
         context.Response.ContentLength64 = payload.Length;
         await context.Response.OutputStream.WriteAsync(payload).ConfigureAwait(false);
         context.Response.Close();
@@ -245,6 +263,55 @@ internal sealed class MockOpenAiServer : IAsyncDisposable
         }
 
         return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>
+    /// 构造一段请求工具调用的流式响应。
+    /// OpenAI 的流式工具调用是增量的：delta.tool_calls[].function.arguments 是分片拼起来的，
+    /// 这里一次性给全，便于断言。
+    /// </summary>
+    public static string BuildToolCallSse(
+        string toolName,
+        string argumentsJson = "{}",
+        string callId = "call_1",
+        string model = "gpt-4o-mini")
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("id", "chatcmpl-tool");
+            writer.WriteString("object", "chat.completion.chunk");
+            writer.WriteNumber("created", 1);
+            writer.WriteString("model", model);
+
+            writer.WriteStartArray("choices");
+            writer.WriteStartObject();
+            writer.WriteNumber("index", 0);
+
+            // tool_calls 必须嵌在 delta 里，与 content 同级
+            writer.WriteStartObject("delta");
+            writer.WriteStartArray("tool_calls");
+            writer.WriteStartObject();
+            writer.WriteNumber("index", 0);
+            writer.WriteString("id", callId);
+            writer.WriteString("type", "function");
+            writer.WriteStartObject("function");
+            writer.WriteString("name", toolName);
+            writer.WriteString("arguments", argumentsJson);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+            writer.WriteEndArray();
+            writer.WriteEndObject();   // delta
+
+            writer.WriteNull("finish_reason");
+            writer.WriteEndObject();
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        var chunk = Encoding.UTF8.GetString(stream.ToArray());
+        return $"data: {chunk}\n\ndata: [DONE]\n\n";
     }
 
     private static string BuildUsageJson(int promptTokens, int completionTokens)

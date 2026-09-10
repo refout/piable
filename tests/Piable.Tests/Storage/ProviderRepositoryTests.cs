@@ -59,7 +59,10 @@ public class ProviderRepositoryTests
         var combined = new System.Text.StringBuilder();
         foreach (var file in files)
         {
-            combined.Append(System.Text.Encoding.UTF8.GetString(await ReadAllowingSharedWriteAsync(file)));
+            if (await TryReadAsync(file) is { } bytes)
+            {
+                combined.Append(System.Text.Encoding.UTF8.GetString(bytes));
+            }
         }
 
         var rawText = combined.ToString();
@@ -68,17 +71,32 @@ public class ProviderRepositoryTests
     }
 
     /// <summary>
-    /// SQLite 正持有这些文件的句柄，且共享模式比 File.ReadAllBytes 的默认值宽松，
-    /// 直接读会撞上"文件被另一进程占用"。这里显式放宽容忍度。
+    /// 读取数据目录下的文件，容忍两种竞态：
+    ///
+    /// <list type="bullet">
+    ///   <item>SQLite 正持有句柄，且共享模式比 File.ReadAllBytes 的默认值宽松，
+    ///         直接读会撞上"文件被另一进程占用"；</item>
+    ///   <item>SQLite 会在最后一个连接关闭时把 WAL 合并回主库并<b>删除</b>该文件，
+    ///         于是 GetFiles 枚举到它、真正打开时它已经不存在了。</item>
+    /// </list>
+    ///
+    /// 两种情况下内容都已落到别的文件里，跳过即可，不影响"磁盘上不得出现明文"这一断言。
     /// </summary>
-    private static async Task<byte[]> ReadAllowingSharedWriteAsync(string path)
+    private static async Task<byte[]?> TryReadAsync(string path)
     {
-        await using var stream = new FileStream(
-            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        try
+        {
+            await using var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 
-        using var buffer = new MemoryStream();
-        await stream.CopyToAsync(buffer);
-        return buffer.ToArray();
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            return buffer.ToArray();
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
     }
 
     [Fact]

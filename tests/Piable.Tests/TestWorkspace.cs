@@ -40,7 +40,9 @@ internal sealed class TestWorkspace : IAsyncDisposable
         Directory.CreateDirectory(root);
 
         var paths = new AppPaths(root);
-        var database = new PiableDatabase(paths.DatabasePath);
+        // 关闭连接池：池化连接会一直占着文件句柄，只能靠进程级的 ClearAllPools 释放，
+        // 而那会连带清掉并行运行的其他测试正在使用的连接，导致随机失败。
+        var database = new PiableDatabase(paths.DatabasePath, pooling: false);
         await database.InitializeAsync();
 
         return new TestWorkspace(root, paths, database);
@@ -48,9 +50,6 @@ internal sealed class TestWorkspace : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        // Microsoft.Data.Sqlite 会池化连接，不清空池就删不掉文件
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-
         try
         {
             if (Directory.Exists(Root))

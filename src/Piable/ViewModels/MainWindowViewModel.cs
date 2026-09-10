@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Piable.Models;
 using Piable.Services;
+using Piable.Services.Tools;
 
 namespace Piable.ViewModels;
 
@@ -18,6 +19,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
     private readonly ISessionService _sessions;
     private readonly IAgentOrchestrator _orchestrator;
     private readonly ITokenCostCalculator _calculator;
+    private readonly ISkillService _skills;
+    private readonly IToolCatalog _toolCatalog;
 
     private CancellationTokenSource? _statusClearCts;
     private IReadOnlyList<Agent> _agents = [];
@@ -59,15 +62,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
         ISessionService sessions,
         IAgentOrchestrator orchestrator,
         ITokenCostCalculator calculator,
-        IModelListService modelList)
+        IModelListService modelList,
+        ISkillService skills,
+        IToolCatalog toolCatalog,
+        IMcpClientService mcp)
     {
         _config = config;
         _sessions = sessions;
         _orchestrator = orchestrator;
         _calculator = calculator;
+        _skills = skills;
+        _toolCatalog = toolCatalog;
 
         ProviderConfig = new ProviderConfigViewModel(config, modelList, orchestrator, this);
-        AgentConfig = new AgentConfigViewModel(config, this);
+        AgentConfig = new AgentConfigViewModel(config, skills, this);
+        SkillConfig = new SkillConfigViewModel(skills, this);
+        McpConfig = new McpServerConfigViewModel(config, this, mcp);
         Preferences = new PreferencesViewModel(config, this);
 
         ProviderConfig.ProvidersChanged += async (_, _) => await ReloadProvidersAsync().ConfigureAwait(true);
@@ -84,6 +94,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
     public ProviderConfigViewModel ProviderConfig { get; }
 
     public AgentConfigViewModel AgentConfig { get; }
+
+    public SkillConfigViewModel SkillConfig { get; }
+
+    public McpServerConfigViewModel McpConfig { get; }
 
     public PreferencesViewModel Preferences { get; }
 
@@ -248,6 +262,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
     {
         await ProviderConfig.LoadAsync().ConfigureAwait(true);
         await AgentConfig.LoadAsync().ConfigureAwait(true);
+        await SkillConfig.LoadAsync().ConfigureAwait(true);
+        await McpConfig.LoadAsync().ConfigureAwait(true);
         await Preferences.LoadAsync().ConfigureAwait(true);
     }
 
@@ -289,7 +305,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
         }
 
         var vm = new ChatSessionViewModel(
-            session, _agents, _provider, _sessions, _orchestrator, _calculator, Preferences.Snapshot, this)
+            session, _agents, _provider, _sessions, _orchestrator, _toolCatalog,
+            _calculator, Preferences.Snapshot, this)
         {
             IsActive = true,
         };

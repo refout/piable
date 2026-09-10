@@ -25,17 +25,10 @@ public class MainWindowLayoutTests
         CreateWindowAsync()
     {
         var workspace = await TestWorkspace.CreateAsync();
+        var services = TestServices.Create(workspace);
+        await services.InitializeSeedDataAsync();
 
-        var config = new ConfigService(workspace.Providers, workspace.Agents, workspace.Preferences);
-        await config.InitializeAsync();
-
-        var sessions = new SessionService(workspace.Sessions);
-        var calculator = new TokenCostCalculator();
-        var orchestrator = new AgentOrchestrator(new ChatClientFactory());
-
-        var viewModel = new MainWindowViewModel(
-            config, sessions, orchestrator, calculator, new ModelListService(new HttpClient()));
-
+        var viewModel = services.CreateMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var window = new MainWindow
@@ -177,9 +170,9 @@ public class MainWindowLayoutTests
         var inputBox = Find<TextBox>(window, t => t.Name == "InputBox");
         Assert.False(inputBox.IsEffectivelyVisible, "配置视图下不应显示对话输入框");
 
-        // API 配置 / 智能体管理 / 偏好设置
+        // API 配置 / 智能体管理 / 技能 / MCP 服务器 / 偏好设置
         var tabs = window.GetVisualDescendants().OfType<TabControl>().First();
-        Assert.Equal(3, tabs.ItemCount);
+        Assert.Equal(5, tabs.ItemCount);
 
         window.Close();
     }

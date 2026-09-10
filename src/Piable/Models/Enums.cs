@@ -46,3 +46,29 @@ public enum ModelListFormat
     /// <summary>Ollama 风格：<c>{ "models": [ { "name": "llama3" } ] }</c>。</summary>
     Ollama,
 }
+
+/// <summary>
+/// 工具的风险等级。决定模型请求调用它时是否需要智能体显式授权。
+///
+/// 分级的依据只有一条：<b>如果模型被不可信内容诱导着调用了它，会不会造成用户不想要的后果。</b>
+/// 读时间是无论如何都无害的；执行 shell 命令则可能删文件、发网络请求。
+/// </summary>
+public enum ToolRisk
+{
+    /// <summary>无副作用或副作用可为用户接受，默认放行。</summary>
+    Safe,
+
+    /// <summary>可能修改系统状态或读取敏感数据，需要智能体显式开启「允许执行危险工具」。</summary>
+    Dangerous,
+}
+
+/// <summary>工具的来源，用于界面上区分同名工具的出处。</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<ToolSource>))]
+public enum ToolSource
+{
+    /// <summary>来自本机技能。</summary>
+    Skill,
+
+    /// <summary>来自 MCP 服务器。</summary>
+    Mcp,
+}

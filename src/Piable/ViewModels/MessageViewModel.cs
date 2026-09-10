@@ -13,7 +13,7 @@ namespace Piable.ViewModels;
 /// 用户切换"显示费用"后只需通知各消息重新求值即可。这样避免了
 /// 消息订阅偏好变更事件所带来的生命周期纠缠（消息会一直引用着偏好对象）。
 /// </summary>
-public sealed partial class MessageViewModel : ViewModelBase
+public sealed partial class MessageViewModel : ChatItemViewModel
 {
     private readonly ITokenCostCalculator _calculator;
     private readonly UserPreferences _preferences;
@@ -41,7 +41,7 @@ public sealed partial class MessageViewModel : ViewModelBase
 
     public MessageRole Role => Model.Role;
 
-    public bool IsUser => Model.Role == MessageRole.User;
+    public override bool IsUser => Model.Role == MessageRole.User;
 
     public bool IsAssistant => Model.Role == MessageRole.Assistant;
 

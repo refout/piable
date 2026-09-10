@@ -10,11 +10,18 @@ namespace Piable.Services.Storage;
 public sealed class PiableDatabase
 {
     /// <summary>当前结构版本，写入 SQLite 的 user_version 字段。</summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     private readonly string _connectionString;
 
-    public PiableDatabase(string databasePath)
+    /// <param name="databasePath">数据库文件路径。</param>
+    /// <param name="pooling">
+    /// 是否启用连接池。生产环境应当开启（省去反复建连的开销）；
+    /// 测试中应关闭，因为池化连接会一直占着文件句柄，
+    /// 而释放它只能靠进程级的 <c>SqliteConnection.ClearAllPools()</c>——
+    /// 那会连带清掉并行运行的其他测试正在使用的连接。
+    /// </param>
+    public PiableDatabase(string databasePath, bool pooling = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
 
@@ -30,6 +37,7 @@ public sealed class PiableDatabase
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = pooling,
         }.ToString();
     }
 
@@ -71,18 +79,34 @@ public sealed class PiableDatabase
         await ExecuteScalarAsync(connection, "PRAGMA journal_mode = WAL;", ct).ConfigureAwait(false);
         await ExecuteNonQueryAsync(connection, "PRAGMA synchronous = NORMAL;", ct).ConfigureAwait(false);
 
-        var version = Convert.ToInt32(
+        var storedVersion = Convert.ToInt32(
             await ExecuteScalarAsync(connection, "PRAGMA user_version;", ct).ConfigureAwait(false) ?? 0);
+
+        // 逐级迁移：每完成一步就把本地 version 推进，新库因此会依次跑完所有迁移，
+        // 而不是只跑第一段。这样每段迁移的 SQL 都如实描述它当时做了什么，
+        // 不会出现"V1 偷偷包含了 V2 的改动"这种对不上的情况。
+        var version = storedVersion;
 
         if (version < 1)
         {
             await ExecuteNonQueryAsync(connection, SchemaV1, ct).ConfigureAwait(false);
+            version = 1;
         }
 
-        if (version != CurrentSchemaVersion)
+        if (version < 2)
+        {
+            await ExecuteNonQueryAsync(connection, MigrationV2, ct).ConfigureAwait(false);
+            version = 2;
+        }
+
+        // 只有真正执行过迁移才写回版本号。
+        // 注意比较的是数据库里的原值而非迁移后的局部变量：新库跑完 V1+V2 后
+        // 文件里记的仍是 0，必须写回，否则下次启动会重跑 V2 的 ALTER TABLE ——
+        // 而该列已经存在，会直接报错让应用起不来。
+        if (version != storedVersion)
         {
             await ExecuteNonQueryAsync(
-                connection, $"PRAGMA user_version = {CurrentSchemaVersion};", ct).ConfigureAwait(false);
+                connection, $"PRAGMA user_version = {version};", ct).ConfigureAwait(false);
         }
     }
 
@@ -306,5 +330,17 @@ public sealed class PiableDatabase
 
         CREATE INDEX IF NOT EXISTS idx_sessions_updated ON Sessions(UpdatedAt DESC);
         CREATE INDEX IF NOT EXISTS idx_messages_session ON Messages(SessionId, SortOrder);
+        """;
+
+    /// <summary>
+    /// 结构版本 2：智能体增加「允许执行危险工具」开关，技能增加面向模型的工具名。
+    ///
+    /// 技能需要单独的 ToolName 是因为 OpenAI 兼容接口要求函数名匹配
+    /// <c>^[a-zA-Z0-9_-]{1,64}$</c>，而技能名称通常是中文（如「执行命令」），
+    /// 直接拿名称当工具名会被供应商拒绝。
+    /// </summary>
+    private const string MigrationV2 = """
+        ALTER TABLE Agents ADD COLUMN AllowDangerousTools INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE Skills ADD COLUMN ToolName TEXT NOT NULL DEFAULT '';
         """;
 }

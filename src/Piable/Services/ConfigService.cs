@@ -32,6 +32,12 @@ public interface IConfigService
 
     Task<UserPreferences> GetPreferencesAsync(CancellationToken ct = default);
     Task SavePreferencesAsync(UserPreferences preferences, CancellationToken ct = default);
+
+    // ---- MCP 服务器（设计文档 2.2 将 MCP 的 CRUD 归在配置服务下）----
+
+    Task<IReadOnlyList<McpServerConfig>> GetMcpServersAsync(CancellationToken ct = default);
+    Task SaveMcpServerAsync(McpServerConfig server, CancellationToken ct = default);
+    Task DeleteMcpServerAsync(string id, CancellationToken ct = default);
 }
 
 /// <inheritdoc />
@@ -44,15 +50,18 @@ public sealed class ConfigService : IConfigService
     private readonly ProviderRepository _providers;
     private readonly AgentRepository _agents;
     private readonly PreferenceRepository _preferences;
+    private readonly McpServerRepository _mcpServers;
 
     public ConfigService(
         ProviderRepository providers,
         AgentRepository agents,
-        PreferenceRepository preferences)
+        PreferenceRepository preferences,
+        McpServerRepository mcpServers)
     {
         _providers = providers;
         _agents = agents;
         _preferences = preferences;
+        _mcpServers = mcpServers;
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)
@@ -147,6 +156,20 @@ public sealed class ConfigService : IConfigService
 
     public Task SavePreferencesAsync(UserPreferences preferences, CancellationToken ct = default) =>
         _preferences.SaveAsync(preferences, ct);
+
+    // ---------------- MCP 服务器 ----------------
+
+    public async Task<IReadOnlyList<McpServerConfig>> GetMcpServersAsync(CancellationToken ct = default) =>
+        await _mcpServers.GetAllAsync(ct).ConfigureAwait(false);
+
+    public Task SaveMcpServerAsync(McpServerConfig server, CancellationToken ct = default)
+    {
+        server.UpdatedAt = DateTimeOffset.Now;
+        return _mcpServers.UpsertAsync(server, ct);
+    }
+
+    public Task DeleteMcpServerAsync(string id, CancellationToken ct = default) =>
+        _mcpServers.DeleteAsync(id, ct);
 
     // ---------------- 内置数据 ----------------
 

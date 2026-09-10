@@ -26,17 +26,29 @@ public sealed class SkillRepository
         return result;
     }
 
+    public async Task<SkillDefinition?> GetAsync(string id, CancellationToken ct = default)
+    {
+        await using var connection = await _database.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Skills WHERE Id = $id;";
+        command.AddParam("$id", id);
+
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        return await reader.ReadAsync(ct).ConfigureAwait(false) ? Map(reader) : null;
+    }
+
     public async Task UpsertAsync(SkillDefinition skill, CancellationToken ct = default)
     {
         await using var connection = await _database.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO Skills (
-                Id, Name, Description, ToolSpec, Handler, Enabled, CreatedAt, UpdatedAt)
+                Id, Name, ToolName, Description, ToolSpec, Handler, Enabled, CreatedAt, UpdatedAt)
             VALUES (
-                $id, $name, $description, $toolSpec, $handler, $enabled, $createdAt, $updatedAt)
+                $id, $name, $toolName, $description, $toolSpec, $handler, $enabled, $createdAt, $updatedAt)
             ON CONFLICT(Id) DO UPDATE SET
                 Name = excluded.Name,
+                ToolName = excluded.ToolName,
                 Description = excluded.Description,
                 ToolSpec = excluded.ToolSpec,
                 Handler = excluded.Handler,
@@ -46,6 +58,7 @@ public sealed class SkillRepository
 
         command.AddParam("$id", skill.Id);
         command.AddParam("$name", skill.Name);
+        command.AddParam("$toolName", skill.ToolName);
         command.AddParam("$description", skill.Description);
         command.AddParam("$toolSpec", skill.ToolSpec);
         command.AddParam("$handler", skill.Handler);
@@ -69,6 +82,7 @@ public sealed class SkillRepository
     {
         Id = reader.ReadString("Id"),
         Name = reader.ReadString("Name"),
+        ToolName = reader.ReadString("ToolName"),
         Description = reader.ReadString("Description"),
         ToolSpec = reader.ReadString("ToolSpec"),
         Handler = reader.ReadString("Handler"),

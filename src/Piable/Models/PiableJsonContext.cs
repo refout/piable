@@ -30,6 +30,7 @@ namespace Piable.Models;
 [JsonSerializable(typeof(ChatMessage), TypeInfoPropertyName = "ChatMessage")]
 [JsonSerializable(typeof(List<ChatMessage>), TypeInfoPropertyName = "ChatMessageList")]
 [JsonSerializable(typeof(UserPreferences), TypeInfoPropertyName = "UserPreferences")]
+[JsonSerializable(typeof(ToolCallPayload), TypeInfoPropertyName = "ToolCallPayload")]
 // 以下三个是数据库中的 JSON 列与模型列表响应用到的容器类型，
 // 显式命名属性以免依赖生成器的默认命名规则。
 [JsonSerializable(typeof(List<string>), TypeInfoPropertyName = "StringList")]

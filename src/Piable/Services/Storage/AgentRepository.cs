@@ -56,10 +56,10 @@ public sealed class AgentRepository
         command.CommandText = """
             INSERT INTO Agents (
                 Id, Name, Description, SystemPrompt, Model, Temperature, MaxTokens, TopP,
-                McpServerIds, SkillIds, IsDefault, IsBuiltIn, CreatedAt, UpdatedAt)
+                McpServerIds, SkillIds, IsDefault, IsBuiltIn, AllowDangerousTools, CreatedAt, UpdatedAt)
             VALUES (
                 $id, $name, $description, $systemPrompt, $model, $temperature, $maxTokens, $topP,
-                $mcpServerIds, $skillIds, $isDefault, $isBuiltIn, $createdAt, $updatedAt)
+                $mcpServerIds, $skillIds, $isDefault, $isBuiltIn, $allowDangerousTools, $createdAt, $updatedAt)
             ON CONFLICT(Id) DO UPDATE SET
                 Name = excluded.Name,
                 Description = excluded.Description,
@@ -71,6 +71,7 @@ public sealed class AgentRepository
                 McpServerIds = excluded.McpServerIds,
                 SkillIds = excluded.SkillIds,
                 IsDefault = excluded.IsDefault,
+                AllowDangerousTools = excluded.AllowDangerousTools,
                 UpdatedAt = excluded.UpdatedAt;
             """;
 
@@ -86,6 +87,7 @@ public sealed class AgentRepository
         command.AddParam("$skillIds", SqliteExtensions.SerializeStringList(agent.SkillIds));
         command.AddParam("$isDefault", agent.IsDefault);
         command.AddParam("$isBuiltIn", agent.IsBuiltIn);
+        command.AddParam("$allowDangerousTools", agent.AllowDangerousTools);
         command.AddParam("$createdAt", agent.CreatedAt);
         command.AddParam("$updatedAt", agent.UpdatedAt);
 
@@ -127,6 +129,7 @@ public sealed class AgentRepository
         SkillIds = SqliteExtensions.DeserializeStringList(reader.ReadNullableString("SkillIds")),
         IsDefault = reader.ReadBool("IsDefault"),
         IsBuiltIn = reader.ReadBool("IsBuiltIn"),
+        AllowDangerousTools = reader.ReadBool("AllowDangerousTools"),
         CreatedAt = reader.ReadDateTimeOffset("CreatedAt"),
         UpdatedAt = reader.ReadDateTimeOffset("UpdatedAt"),
     };

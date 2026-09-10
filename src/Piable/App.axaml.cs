@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Piable.Helpers;
 using Piable.Services;
 using Piable.Services.Storage;
+using Piable.Services.Tools;
 using Piable.ViewModels;
 using Piable.Views;
 
@@ -64,7 +65,19 @@ public partial class App : Application
         services.AddSingleton<IConfigService>(sp => new ConfigService(
             sp.GetRequiredService<ProviderRepository>(),
             sp.GetRequiredService<AgentRepository>(),
-            sp.GetRequiredService<PreferenceRepository>()));
+            sp.GetRequiredService<PreferenceRepository>(),
+            sp.GetRequiredService<McpServerRepository>()));
+
+        services.AddSingleton<ISkillService>(sp => new SkillService(
+            sp.GetRequiredService<SkillRepository>()));
+
+        // MCP 连接持有子进程与网络会话，必须是单例，否则每处解析都会新开一份连接
+        services.AddSingleton<IMcpClientService>(_ => new McpClientService());
+
+        services.AddSingleton<IToolCatalog>(sp => new ToolCatalog(
+            sp.GetRequiredService<ISkillService>(),
+            sp.GetRequiredService<IMcpClientService>(),
+            sp.GetRequiredService<IConfigService>()));
 
         services.AddSingleton<ISessionService>(sp => new SessionService(
             sp.GetRequiredService<SessionRepository>()));
@@ -86,7 +99,10 @@ public partial class App : Application
             sp.GetRequiredService<ISessionService>(),
             sp.GetRequiredService<IAgentOrchestrator>(),
             sp.GetRequiredService<ITokenCostCalculator>(),
-            sp.GetRequiredService<IModelListService>()));
+            sp.GetRequiredService<IModelListService>(),
+            sp.GetRequiredService<ISkillService>(),
+            sp.GetRequiredService<IToolCatalog>(),
+            sp.GetRequiredService<IMcpClientService>()));
 
         return services.BuildServiceProvider();
     }
@@ -101,6 +117,9 @@ public partial class App : Application
             // 主库打不开时先用备份顶上，再建表
             await database.RestoreFromBackupIfNeededAsync(paths.BackupPath).ConfigureAwait(true);
             await database.InitializeAsync().ConfigureAwait(true);
+
+            // 写入内置技能，须在界面读取工具之前完成
+            await services.GetRequiredService<ISkillService>().InitializeAsync().ConfigureAwait(true);
 
             await services.GetRequiredService<MainWindowViewModel>().InitializeAsync().ConfigureAwait(true);
         }
@@ -136,6 +155,10 @@ public partial class App : Application
 
         try
         {
+            // MCP 连接持有子进程，必须显式关闭，否则会留下孤儿进程
+            _services.GetRequiredService<IMcpClientService>()
+                .DisposeAsync().AsTask().GetAwaiter().GetResult();
+
             var paths = _services.GetRequiredService<AppPaths>();
             _services.GetRequiredService<PiableDatabase>().BackupTo(paths.BackupPath);
         }

@@ -34,6 +34,14 @@ public sealed class Agent
     /// <summary>是否内置。内置智能体不可删除。</summary>
     public bool IsBuiltIn { get; set; }
 
+    /// <summary>
+    /// 是否允许执行被标记为危险的工具（如 shell 命令）。
+    ///
+    /// 默认关闭：模型可能被对话内容或工具返回值中的提示注入诱导去调用危险工具，
+    /// 而这类调用一旦执行就无法撤销。需要时由用户按智能体逐个开启。
+    /// </summary>
+    public bool AllowDangerousTools { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.Now;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.Now;
 
