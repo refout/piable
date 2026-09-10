@@ -1,0 +1,8 @@
+root = false
+
+[*.cs]
+# xUnit1051：建议把 TestContext.Current.CancellationToken 传给所有接受 CancellationToken 的 API，
+# 以便测试运行被取消时能及时中止。本套测试整体在数秒内跑完，取消带来的收益极低，
+# 而 300 多处调用点逐个改动只会把真正的告警淹没在噪音里。
+# 若将来出现耗时的集成测试，应在那个测试里显式接入取消令牌，而不是全局开启本规则。
+dotnet_diagnostic.xUnit1051.severity = none

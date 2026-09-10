@@ -21,6 +21,16 @@
     <!-- AOT 仅在显式开启时启用（发布阶段验证后再定） -->
     <PublishAot Condition="'$(AotEnabled)' == 'true'">true</PublishAot>
     <InvariantGlobalization Condition="'$(AotEnabled)' == 'true'">false</InvariantGlobalization>
+
+    <!-- 不把第三方包附带的 .pdb / .xml 复制到发布目录。
+         SkiaSharp 等的调试符号单个就有 80MB，对最终用户毫无用处。 -->
+    <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+  </PropertyGroup>
+
+  <!-- 单文件发布：把原生库(Skia/HarfBuzz/SQLite/ANGLE)一并打包并压缩 -->
+  <PropertyGroup Condition="'$(PublishSingleFile)' == 'true'">
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -48,4 +58,19 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Piable.Tests" />
   </ItemGroup>
+
+  <!--
+    剔除第三方原生库附带的调试符号。SkiaSharp / HarfBuzz 的 .pdb 合计上百 MB，
+    它们由原生资源包直接提供，AllowedReferenceRelatedFileExtensions 覆盖不到，
+    只能在发布文件列表计算完成后过滤。
+    Release 下本程序自身的符号已通过 DebugType=embedded 内嵌进可执行文件，不受影响。
+  -->
+  <Target Name="ExcludeNativeSymbolsFromPublish"
+          AfterTargets="ComputeResolvedFilesToPublishList"
+          Condition="'$(Configuration)' == 'Release'">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="'%(Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
 </Project>
