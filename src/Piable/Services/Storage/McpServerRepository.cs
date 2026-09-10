@@ -4,7 +4,7 @@ using Piable.Models;
 namespace Piable.Services.Storage;
 
 /// <summary>MCP 服务器配置的持久化。首版仅存取，连接管理在后续阶段实现。</summary>
-internal sealed class McpServerRepository
+public sealed class McpServerRepository
 {
     private readonly PiableDatabase _database;
 

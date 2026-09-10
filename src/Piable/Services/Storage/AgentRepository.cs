@@ -4,7 +4,7 @@ using Piable.Models;
 namespace Piable.Services.Storage;
 
 /// <summary>智能体的持久化。</summary>
-internal sealed class AgentRepository
+public sealed class AgentRepository
 {
     private readonly PiableDatabase _database;
 

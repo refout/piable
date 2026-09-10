@@ -4,7 +4,7 @@ using Piable.Models;
 namespace Piable.Services.Storage;
 
 /// <summary>会话与消息的持久化。</summary>
-internal sealed class SessionRepository
+public sealed class SessionRepository
 {
     private readonly PiableDatabase _database;
 

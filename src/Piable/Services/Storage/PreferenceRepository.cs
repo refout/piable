@@ -8,7 +8,7 @@ namespace Piable.Services.Storage;
 /// 整体以单条 JSON 记录存放：偏好项会随版本增删，逐项建列或逐键存行都会带来迁移负担，
 /// 而整块 JSON 对缺失字段天然向后兼容（反序列化时回落到属性默认值）。
 /// </summary>
-internal sealed class PreferenceRepository
+public sealed class PreferenceRepository
 {
     private const string PreferencesKey = "user_preferences";
 

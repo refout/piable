@@ -5,7 +5,7 @@ using Piable.Models;
 namespace Piable.Services.Storage;
 
 /// <summary>供应商配置的持久化。API Key 在写库前加密、读出后解密。</summary>
-internal sealed class ProviderRepository
+public sealed class ProviderRepository
 {
     private readonly PiableDatabase _database;
     private readonly ISecretProtector _protector;
