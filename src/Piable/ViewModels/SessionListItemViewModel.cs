@@ -6,9 +6,6 @@ namespace Piable.ViewModels;
 /// <summary>侧边栏中的一条会话。</summary>
 public sealed partial class SessionListItemViewModel : InlineConfirmViewModel
 {
-    [ObservableProperty]
-    private bool _isSelected;
-
     public SessionListItemViewModel(ChatSessionSummary summary, string agentName)
     {
         Id = summary.Id;
@@ -16,7 +13,6 @@ public sealed partial class SessionListItemViewModel : InlineConfirmViewModel
         MessageCount = summary.MessageCount;
         TotalTokens = summary.TotalTokens;
         AgentName = agentName;
-        UpdatedAt = summary.UpdatedAt;
     }
 
     public string Id { get; }
@@ -32,8 +28,6 @@ public sealed partial class SessionListItemViewModel : InlineConfirmViewModel
 
     [ObservableProperty]
     private string _agentName;
-
-    public DateTimeOffset UpdatedAt { get; }
 
     /// <summary>列表项第二行：<c>💬 12条 · 🔢 2.3K tokens · 🤖 通用助手</c>。</summary>
     public string SummaryText

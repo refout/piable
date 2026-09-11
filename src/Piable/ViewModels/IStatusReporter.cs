@@ -6,9 +6,6 @@ namespace Piable.ViewModels;
 /// </summary>
 public interface IStatusReporter
 {
-    /// <summary>常规提示，短暂显示后自动消失。</summary>
-    void ReportInfo(string message);
-
     /// <summary>成功提示。</summary>
     void ReportSuccess(string message);
 

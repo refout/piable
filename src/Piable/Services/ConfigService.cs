@@ -114,10 +114,20 @@ public sealed class ConfigService : IConfigService
         return created;
     }
 
-    public Task SaveProviderAsync(ProviderConfig provider, CancellationToken ct = default)
+    public async Task SaveProviderAsync(ProviderConfig provider, CancellationToken ct = default)
     {
         provider.UpdatedAt = DateTimeOffset.Now;
-        return _providers.UpsertAsync(provider, ct);
+        await _providers.UpsertAsync(provider, ct).ConfigureAwait(false);
+
+        // 维持"只要存在供应商，就必定有一个默认项"这一不变量。
+        // 界面上的首次配置可能直接保存而不经过 GetOrCreateProviderAsync，
+        // 那样会留下一个没有默认供应商的库，用户随后发起对话就会莫名其妙地没有可用配置。
+        var all = await _providers.GetAllAsync(ct).ConfigureAwait(false);
+        if (all.Count > 0 && all.TrueForAll(p => !p.IsDefault))
+        {
+            all[0].IsDefault = true;
+            await _providers.UpsertAsync(all[0], ct).ConfigureAwait(false);
+        }
     }
 
     public Task DeleteProviderAsync(string id, CancellationToken ct = default) =>

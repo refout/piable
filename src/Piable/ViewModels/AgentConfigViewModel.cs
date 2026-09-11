@@ -92,9 +92,6 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
     /// <summary>智能体是否有改动待保存。</summary>
     public bool HasSelection => SelectedAgent is not null;
 
-    /// <summary>内置智能体不允许删除。</summary>
-    public bool CanDeleteSelected => SelectedAgent?.CanDelete ?? false;
-
     public async Task LoadAsync(CancellationToken ct = default)
     {
         Agents.Clear();
@@ -125,7 +122,6 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
     partial void OnSelectedAgentChanged(AgentListItemViewModel? value)
     {
         OnPropertyChanged(nameof(HasSelection));
-        OnPropertyChanged(nameof(CanDeleteSelected));
 
         if (value is null)
         {
@@ -247,20 +243,39 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// 新建一个未保存的草稿，而不是立刻写库。
+    /// 与技能页、MCP 页保持一致：点"新建"只是打开一张空表单，点保存才真正创建，
+    /// 否则用户每次误点都会永久多出一条"新智能体"。
+    /// </summary>
     [RelayCommand]
-    private async Task NewAgentAsync()
+    private void NewAgent()
     {
-        var agent = new Agent
+        // 先清空选中项（它会一并清掉 _editing），再放上新草稿
+        SelectedAgent = null;
+        _editing = new Agent
         {
             Name = "新智能体",
             SystemPrompt = "你是一个乐于助人的 AI 助手。",
         };
 
-        await _config.SaveAgentAsync(agent).ConfigureAwait(true);
-        await ReloadAsync().ConfigureAwait(true);
+        Name = _editing.Name;
+        Description = null;
+        SystemPrompt = _editing.SystemPrompt;
+        FollowProviderDefaults = true;
+        Model = null;
+        Temperature = 0.7;
+        MaxTokens = 2048;
+        TopP = 1.0;
+        AllowDangerousTools = false;
 
-        SelectedAgent = Agents.FirstOrDefault(a => a.Id == agent.Id);
-        _status.ReportSuccess("已新建智能体");
+        foreach (var link in AvailableSkills.Concat(AvailableMcpServers))
+        {
+            link.IsSelected = false;
+        }
+
+        StatusMessage = "填写后点击保存即可创建";
+        IsStatusError = false;
     }
 
     [RelayCommand]
@@ -300,7 +315,15 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
             _editing.TopP = TopP;
         }
 
-        await _config.SaveAgentAsync(_editing).ConfigureAwait(true);
+        try
+        {
+            await _config.SaveAgentAsync(_editing).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ReportFailure("保存失败", ex);
+            return;
+        }
 
         IsStatusError = false;
         StatusMessage = "✅ 已保存";
@@ -320,13 +343,35 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
         }
 
         _editing.IsDefault = true;
-        await _config.SaveAgentAsync(_editing).ConfigureAwait(true);
+
+        try
+        {
+            await _config.SaveAgentAsync(_editing).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ReportFailure("设为默认失败", ex);
+            return;
+        }
 
         var id = _editing.Id;
         await ReloadAsync().ConfigureAwait(true);
         SelectedAgent = Agents.FirstOrDefault(a => a.Id == id);
 
         _status.ReportSuccess($"已将「{Name}」设为默认智能体");
+    }
+
+    /// <summary>
+    /// 把写库失败反馈到界面。
+    /// 不处理的话异常会被 AsyncRelayCommand 静默吞掉，用户看到的是一切正常，
+    /// 但数据其实没存进去——这比报错更糟。
+    /// </summary>
+    private void ReportFailure(string action, Exception ex)
+    {
+        var reason = ChatErrorMapper.ToUserMessage(ex) ?? ex.Message;
+        IsStatusError = true;
+        StatusMessage = $"⚠️ {action}：{reason}";
+        _status.ReportError($"⚠️ {action}：{reason}");
     }
 
     [RelayCommand]
@@ -358,8 +403,26 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
     /// <summary>删除智能体。由列表项二次确认后调用。</summary>
     public async Task DeleteAsync(string agentId)
     {
-        await _config.DeleteAgentAsync(agentId).ConfigureAwait(true);
+        try
+        {
+            await _config.DeleteAgentAsync(agentId).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ReportFailure("删除失败", ex);
+            return;
+        }
+
         await ReloadAsync().ConfigureAwait(true);
+
+        // 存储层对内置智能体是静默拒绝的，这里必须复核结果——
+        // 否则界面会报"已删除"而列表里那条还在。
+        if (Agents.Any(a => a.Id == agentId))
+        {
+            _status.ReportError("内置智能体不可删除");
+            return;
+        }
+
         _status.ReportSuccess("智能体已删除");
     }
 }

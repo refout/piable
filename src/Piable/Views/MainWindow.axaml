@@ -46,23 +46,6 @@
             <Setter Property="HorizontalAlignment" Value="Left" />
         </Style>
 
-        <!-- 会话项上的删除按钮：平时隐藏，悬停整行时浮现 -->
-        <Style Selector="Button.rowDelete">
-            <Setter Property="IsVisible" Value="False" />
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
-            <Setter Property="Padding" Value="5,2" />
-            <Setter Property="FontSize" Value="11" />
-            <Setter Property="VerticalAlignment" Value="Top" />
-        </Style>
-        <Style Selector="ListBoxItem:pointerover Button.rowDelete">
-            <Setter Property="IsVisible" Value="True" />
-        </Style>
-        <Style Selector="Button.rowDelete:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="{DynamicResource HoverOverlay}" />
-        </Style>
-
         <!-- 工具调用：整块左对齐，用左侧色条区分危险与被拒 -->
         <Style Selector="Border.toolCall">
             <Setter Property="HorizontalAlignment" Value="Left" />
@@ -85,7 +68,6 @@
             <Setter Property="Background" Value="{DynamicResource PanelBackground}" />
             <Setter Property="CornerRadius" Value="4" />
             <Setter Property="Padding" Value="8,6" />
-            <Setter Property="MaxHeight" Value="260" />
         </Style>
 
         <!-- 右上角的智能体/参数入口 -->
@@ -152,7 +134,7 @@
                                         <Panel Grid.Column="1">
                                             <Button Classes="rowDelete"
                                                     Content="✕"
-                                                    IsVisible="{Binding !IsConfirmingDelete}"
+                                                    Classes.confirming="{Binding IsConfirmingDelete}"
                                                     Command="{Binding RequestDeleteCommand}"
                                                     ToolTip.Tip="删除对话" />
                                             <Button Classes="danger"
@@ -210,6 +192,7 @@
                                            VerticalAlignment="Center"
                                            MaxWidth="220"
                                            TextTrimming="CharacterEllipsis"
+                                           IsVisible="{Binding CurrentSession.ShouldShowHeaderStatistics}"
                                            Text="{Binding CurrentSession.HeaderStatistics}" />
 
                                 <!-- 智能体与参数：收进右上角的按钮，点击展开 -->
@@ -343,17 +326,19 @@
 
                                             <TextBlock Classes="secondary" Text="{Binding SourceLabel}" />
 
+                                            <!-- 结果限高但可滚动。
+                                                 原先靠"截断 + 展开按钮"，但容器限高会把展开后的内容
+                                                 照样裁掉，按钮形同虚设；直接给滚动条更简单也更诚实。 -->
                                             <Border Classes="toolResult">
-                                                <SelectableTextBlock Text="{Binding ResultText}"
-                                                                     TextWrapping="Wrap"
-                                                                     FontFamily="Cascadia Mono,Consolas,monospace"
-                                                                     FontSize="12" />
+                                                <ScrollViewer MaxHeight="240"
+                                                              VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Disabled">
+                                                    <SelectableTextBlock Text="{Binding ResultText}"
+                                                                         TextWrapping="Wrap"
+                                                                         FontFamily="Cascadia Mono,Consolas,monospace"
+                                                                         FontSize="12" />
+                                                </ScrollViewer>
                                             </Border>
-
-                                            <Button Classes="stats"
-                                                    Content="展开完整结果"
-                                                    Command="{Binding ToggleExpandCommand}"
-                                                    IsVisible="{Binding IsTruncatable}" />
                                         </StackPanel>
                                     </Border>
                                 </DataTemplate>
@@ -479,8 +464,11 @@
                                         </Grid>
                                         <Button Content="🔄 获取模型列表"
                                                 HorizontalAlignment="Left"
-                                                IsEnabled="{Binding !ProviderConfig.IsBusy}"
+                                                IsEnabled="{Binding ProviderConfig.CanFetchModels}"
                                                 Command="{Binding ProviderConfig.FetchModelsCommand}" />
+                                        <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                   Text="该供应商使用部署名寻址，不支持自动获取模型列表，请手动添加。"
+                                                   IsVisible="{Binding !ProviderConfig.SupportsModelFetch}" />
                                     </StackPanel>
 
                                     <StackPanel Spacing="4">
@@ -548,7 +536,7 @@
                                                 Command="{Binding ProviderConfig.TestConnectionCommand}" />
                                     </StackPanel>
 
-                                    <TextBlock Text="{Binding ProviderConfig.StatusMessage}"
+                                    <TextBlock Classes="status" Classes.error="{Binding ProviderConfig.IsStatusError}" Text="{Binding ProviderConfig.StatusMessage}"
                                                TextWrapping="Wrap" />
                                 </StackPanel>
                             </ScrollViewer>
@@ -578,9 +566,13 @@
                                                                    Classes="secondary"
                                                                    TextTrimming="CharacterEllipsis" />
                                                     </StackPanel>
-                                                    <Panel Grid.Column="1">
+                                                    <!-- 内置智能体不可删除，整组按钮不出现——
+                                                         给一个点了没反应的按钮比不给更糟 -->
+                                                    <Panel Grid.Column="1" IsVisible="{Binding CanDelete}">
                                                         <Button Classes="rowDelete" Content="✕"
-                                                                IsVisible="{Binding !IsConfirmingDelete}"
+                                                                Classes.confirming="{Binding IsConfirmingDelete}"
+                                                                ToolTip.Tip="删除该智能体"
+                                                                AutomationProperties.Name="删除该智能体"
                                                                 Command="{Binding RequestDeleteCommand}" />
                                                         <Button Classes="danger" Content="确认删除？"
                                                                 IsVisible="{Binding IsConfirmingDelete}"
@@ -712,7 +704,7 @@
                                                     Command="{Binding AgentConfig.RestoreDefaultsCommand}" />
                                         </StackPanel>
 
-                                        <TextBlock Text="{Binding AgentConfig.StatusMessage}"
+                                        <TextBlock Classes="status" Classes.error="{Binding AgentConfig.IsStatusError}" Text="{Binding AgentConfig.StatusMessage}"
                                                    TextWrapping="Wrap" />
                                     </StackPanel>
                                 </ScrollViewer>
@@ -745,7 +737,9 @@
                                                     </StackPanel>
                                                     <Panel Grid.Column="1">
                                                         <Button Classes="rowDelete" Content="✕"
-                                                                IsVisible="{Binding !IsConfirmingDelete}"
+                                                                Classes.confirming="{Binding IsConfirmingDelete}"
+                                                                ToolTip.Tip="删除该技能"
+                                                                AutomationProperties.Name="删除该技能"
                                                                 Command="{Binding RequestDeleteCommand}" />
                                                         <Button Classes="danger" Content="确认删除？"
                                                                 IsVisible="{Binding IsConfirmingDelete}"
@@ -759,7 +753,8 @@
 
                                 <ScrollViewer Grid.Column="1" Margin="12,0,0,0">
                                     <StackPanel Spacing="8" MaxWidth="640"
-                                                HorizontalAlignment="Left">
+                                                HorizontalAlignment="Left"
+                                                IsVisible="{Binding SkillConfig.HasSelection}">
 
                                         <StackPanel Spacing="4">
                                             <TextBlock Classes="sectionTitle" Text="本地实现" />
@@ -815,7 +810,7 @@
                                                 HorizontalAlignment="Left"
                                                 Command="{Binding SkillConfig.SaveCommand}" />
 
-                                        <TextBlock Text="{Binding SkillConfig.StatusMessage}"
+                                        <TextBlock Classes="status" Classes.error="{Binding SkillConfig.IsStatusError}" Text="{Binding SkillConfig.StatusMessage}"
                                                    TextWrapping="Wrap" />
                                     </StackPanel>
                                 </ScrollViewer>
@@ -848,7 +843,9 @@
                                                     </StackPanel>
                                                     <Panel Grid.Column="1">
                                                         <Button Classes="rowDelete" Content="✕"
-                                                                IsVisible="{Binding !IsConfirmingDelete}"
+                                                                Classes.confirming="{Binding IsConfirmingDelete}"
+                                                                ToolTip.Tip="删除该 MCP 服务器"
+                                                                AutomationProperties.Name="删除该 MCP 服务器"
                                                                 Command="{Binding RequestDeleteCommand}" />
                                                         <Button Classes="danger" Content="确认删除？"
                                                                 IsVisible="{Binding IsConfirmingDelete}"
@@ -862,7 +859,8 @@
 
                                 <ScrollViewer Grid.Column="1" Margin="12,0,0,0">
                                     <StackPanel Spacing="8" MaxWidth="640"
-                                                HorizontalAlignment="Left">
+                                                HorizontalAlignment="Left"
+                                                IsVisible="{Binding McpConfig.HasSelection}">
 
                                         <StackPanel Spacing="4">
                                             <TextBlock Classes="sectionTitle" Text="名称" />
@@ -910,7 +908,7 @@
                                                     Command="{Binding McpConfig.TestConnectionCommand}" />
                                         </StackPanel>
 
-                                        <TextBlock Text="{Binding McpConfig.StatusMessage}"
+                                        <TextBlock Classes="status" Classes.error="{Binding McpConfig.IsStatusError}" Text="{Binding McpConfig.StatusMessage}"
                                                    TextWrapping="Wrap" />
 
                                         <Border Classes="card" Padding="12,10">
@@ -946,12 +944,12 @@
                                                    Text="仅改变显示符号；模型定价按所选货币填写，不做汇率换算。" />
                                     </StackPanel>
 
-                                    <TextBlock Classes="sectionTitle" Text="主题" Margin="0,8,0,0" />
+                                    <TextBlock Classes="sectionTitle" Text="主题" Margin="0,8,0,8" />
                                     <ComboBox ItemsSource="{Binding Preferences.AvailableThemes}"
                                               SelectedItem="{Binding Preferences.Theme}"
                                               MinWidth="160" />
 
-                                    <TextBlock Classes="sectionTitle" Text="默认智能体" Margin="0,8,0,0" />
+                                    <TextBlock Classes="sectionTitle" Text="默认智能体" Margin="0,8,0,8" />
                                     <ComboBox ItemsSource="{Binding Preferences.AvailableAgents}"
                                               SelectedItem="{Binding Preferences.DefaultAgent}"
                                               MinWidth="220">
@@ -988,23 +986,30 @@
                 <Panel Grid.Column="0">
                     <TextBlock Text="●" FontSize="12" VerticalAlignment="Center"
                                Foreground="{DynamicResource SuccessBrush}"
-                               IsVisible="{Binding IsConnected}"
-                               ToolTip.Tip="已连接" />
+                               IsVisible="{Binding IsProviderConfigured}"
+                               ToolTip.Tip="供应商配置完整" />
                     <TextBlock Text="○" FontSize="12" VerticalAlignment="Center"
                                Foreground="{DynamicResource TextSecondary}"
-                               IsVisible="{Binding !IsConnected}"
-                               ToolTip.Tip="未连接" />
+                               IsVisible="{Binding !IsProviderConfigured}"
+                               ToolTip.Tip="尚未配置供应商" />
                 </Panel>
 
+                <!-- 限宽并省略：预设名加长模型名会挤窄中间的状态消息，
+                     甚至把右侧的"生成中…"顶出可视区 -->
                 <TextBlock Grid.Column="1" Margin="6,0,0,0" FontSize="12"
                            VerticalAlignment="Center"
+                           MaxWidth="260"
+                           TextTrimming="CharacterEllipsis"
                            Foreground="{DynamicResource TextSecondary}"
+                           ToolTip.Tip="{Binding ProviderModelText}"
                            Text="{Binding ProviderModelText}" />
 
                 <TextBlock Grid.Column="2" Margin="16,0" FontSize="12"
                            VerticalAlignment="Center"
                            TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                           Text="{Binding StatusMessage}" />
+                           Classes.error="{Binding IsStatusError}"
+                           Text="{Binding StatusMessage}"
+                           ToolTip.Tip="{Binding StatusMessage}" />
 
                 <TextBlock Grid.Column="3" FontSize="12"
                            VerticalAlignment="Center"

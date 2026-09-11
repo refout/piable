@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Piable.Models;
+using Piable.Services;
 using Piable.Services.Tools;
 
 namespace Piable.ViewModels;
@@ -191,6 +192,14 @@ public sealed partial class SkillConfigViewModel : ViewModelBase
         {
             IsStatusError = true;
             StatusMessage = $"⚠️ {ex.Message}";
+            return;
+        }
+        catch (Exception ex)
+        {
+            // 写库失败等意外情况同样要反馈，不能被 AsyncRelayCommand 静默吞掉
+            IsStatusError = true;
+            StatusMessage = $"⚠️ 保存失败：{ChatErrorMapper.ToUserMessage(ex) ?? ex.Message}";
+            _status.ReportError(StatusMessage);
             return;
         }
 

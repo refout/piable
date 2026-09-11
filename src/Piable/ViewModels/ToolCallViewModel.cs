@@ -1,5 +1,3 @@
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
 using Piable.Models;
 
 namespace Piable.ViewModels;
@@ -11,17 +9,7 @@ namespace Piable.ViewModels;
 /// </summary>
 public sealed partial class ToolCallViewModel : ChatItemViewModel
 {
-    /// <summary>结果过长时折叠展示，避免一次命令的输出把整屏占满。</summary>
-    private const int PreviewLength = 400;
-
-    [ObservableProperty]
-    private bool _isExpanded;
-
-    public ToolCallViewModel(ToolCallPayload payload, UserPreferences preferences)
-    {
-        Payload = payload;
-        _isExpanded = preferences.ExpandStatisticsByDefault;
-    }
+    public ToolCallViewModel(ToolCallPayload payload) => Payload = payload;
 
     public ToolCallPayload Payload { get; }
 
@@ -41,8 +29,6 @@ public sealed partial class ToolCallViewModel : ChatItemViewModel
 
     public bool IsDenied => Payload.Status == ToolInvocationStatusPayload.Denied;
 
-    public bool IsFailed => Payload.Status == ToolInvocationStatusPayload.Failed;
-
     /// <summary>状态图标。被拒绝用禁止符，与执行失败区分开。</summary>
     public string StatusIcon => Payload.Status switch
     {
@@ -60,28 +46,12 @@ public sealed partial class ToolCallViewModel : ChatItemViewModel
 
     public bool HasDuration => Payload.DurationMs > 0;
 
-    /// <summary>结果文本。过长时未展开只显示前若干字符。</summary>
-    public string ResultText
-    {
-        get
-        {
-            var text = Payload.ResultPayload;
-
-            if (IsExpanded || text.Length <= PreviewLength)
-            {
-                return text;
-            }
-
-            return text[..PreviewLength] + "…";
-        }
-    }
-
-    public bool IsTruncatable => Payload.ResultPayload.Length > PreviewLength;
-
-    [RelayCommand]
-    private void ToggleExpand() => IsExpanded = !IsExpanded;
-
-    partial void OnIsExpandedChanged(bool value) => OnPropertyChanged(nameof(ResultText));
+    /// <summary>
+    /// 结果全文。界面把它放进一个限高的可滚动区域，
+    /// 因此这里不做截断——截断配上"展开"按钮看似够了，但按钮展开后的内容
+    /// 仍然受容器限高裁切，用户依旧看不到完整输出。
+    /// </summary>
+    public string ResultText => Payload.ResultPayload;
 
     /// <summary>由编排器的调用记录构造持久化载荷。</summary>
     public static ToolCallPayload ToPayload(Services.ToolInvocationRecord record) => new()

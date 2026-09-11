@@ -52,10 +52,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
     private string? _busyMessage;
 
     [ObservableProperty]
-    private bool _isConnected;
-
-    [ObservableProperty]
-    private bool _isInitializing = true;
+    private bool _isProviderConfigured;
 
     public MainWindowViewModel(
         IConfigService config,
@@ -111,38 +108,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
             : $"{ProviderPresets.Find(_provider.PresetId)?.DisplayName ?? _provider.PresetId} · "
               + (string.IsNullOrWhiteSpace(_provider.DefaultModel) ? "未选模型" : _provider.DefaultModel);
 
-    public string AgentNameText => CurrentSession?.SelectedAgent?.Name ?? "—";
-
     /// <summary>启动流程：建库、读偏好、加载列表、打开最近会话。</summary>
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        try
+        await _config.InitializeAsync(ct).ConfigureAwait(true);
+
+        await Preferences.LoadAsync(ct).ConfigureAwait(true);
+        IsLeftPanelCollapsed = Preferences.Snapshot.LeftPanelCollapsed;
+        ThemeChangeRequested?.Invoke(this, Preferences.Snapshot.Theme);
+
+        _agents = await _config.GetAgentsAsync(ct).ConfigureAwait(true);
+        await ReloadProvidersAsync(ct).ConfigureAwait(true);
+
+        await LoadSessionListAsync(ct).ConfigureAwait(true);
+
+        var first = Sessions.FirstOrDefault();
+        if (first is null)
         {
-            await _config.InitializeAsync(ct).ConfigureAwait(true);
-
-            await Preferences.LoadAsync(ct).ConfigureAwait(true);
-            IsLeftPanelCollapsed = Preferences.Snapshot.LeftPanelCollapsed;
-            ThemeChangeRequested?.Invoke(this, Preferences.Snapshot.Theme);
-
-            _agents = await _config.GetAgentsAsync(ct).ConfigureAwait(true);
-            await ReloadProvidersAsync(ct).ConfigureAwait(true);
-
-            await LoadSessionListAsync(ct).ConfigureAwait(true);
-
-            var first = Sessions.FirstOrDefault();
-            if (first is null)
-            {
-                // 首次启动：直接开一个空会话，否则右侧是一片没有上下文的空白
-                await NewSessionAsync().ConfigureAwait(true);
-            }
-            else
-            {
-                SelectedSession = first;
-            }
+            // 首次启动：直接开一个空会话，否则右侧是一片没有上下文的空白
+            await NewSessionAsync().ConfigureAwait(true);
         }
-        finally
+        else
         {
-            IsInitializing = false;
+            SelectedSession = first;
         }
     }
 
@@ -156,7 +144,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
                 .ConfigureAwait(true);
         }
 
-        IsConnected = _provider is not null
+        IsProviderConfigured = _provider is not null
                       && !string.IsNullOrWhiteSpace(_provider.DefaultModel)
                       && (!string.IsNullOrWhiteSpace(_provider.ApiKey)
                           || ProviderPresets.Find(_provider.PresetId)?.RequiresApiKey == false);
@@ -315,8 +303,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
         vm.TurnCompleted += OnTurnCompleted;
 
         CurrentSession = vm;
-        item.IsSelected = true;
-        OnPropertyChanged(nameof(AgentNameText));
     }
 
     private void OnSessionTitleChanged(object? sender, EventArgs e)
@@ -351,7 +337,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
         };
 
         SelectedSession.Update(summary, ResolveAgentName(summary.AgentId));
-        OnPropertyChanged(nameof(AgentNameText));
     }
 
     private async Task DeleteSessionAsync(SessionListItemViewModel item)
@@ -370,8 +355,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IStatusReporter
     }
 
     // ---------------- IStatusReporter ----------------
-
-    public void ReportInfo(string message) => SetStatus(message, isError: false);
 
     public void ReportSuccess(string message) => SetStatus(message, isError: false);
 

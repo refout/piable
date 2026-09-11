@@ -39,8 +39,6 @@ public sealed partial class MessageViewModel : ChatItemViewModel
     /// <summary>供 MarkdownRenderer.MarkdownBuilder 绑定的流式 Markdown 源。</summary>
     public ObservableStringBuilder MarkdownBuilder { get; }
 
-    public MessageRole Role => Model.Role;
-
     public override bool IsUser => Model.Role == MessageRole.User;
 
     public bool IsAssistant => Model.Role == MessageRole.Assistant;
@@ -59,8 +57,6 @@ public sealed partial class MessageViewModel : ChatItemViewModel
     public int? TotalTokens => Model.TotalTokens;
 
     public decimal? EstimatedCost => Model.EstimatedCost;
-
-    public string TimestampText => Model.Timestamp.ToLocalTime().ToString("HH:mm");
 
     /// <summary>只有助手消息且确有统计信息时才显示统计条。</summary>
     public bool HasStatistics =>

@@ -324,7 +324,7 @@ public class MainWindowLayoutTests
         var (window, viewModel, workspace) = await CreateWindowAsync();
         await using var _ = workspace;
 
-        Assert.False(viewModel.IsConnected);
+        Assert.False(viewModel.IsProviderConfigured);
         Assert.Equal("未配置供应商", viewModel.ProviderModelText);
 
         window.Close();

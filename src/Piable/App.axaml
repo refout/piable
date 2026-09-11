@@ -27,6 +27,9 @@
                     <SolidColorBrush x:Key="TextSecondary" Color="#61666B" />
                     <SolidColorBrush x:Key="AccentBrush" Color="#2F6FEB" />
                     <SolidColorBrush x:Key="AccentText" Color="#FFFFFF" />
+                    <!-- 选中态高亮：用带 Alpha 的颜色而不是给内容宿主设 Opacity，
+                         后者会连同文字一起变淡 -->
+                    <SolidColorBrush x:Key="AccentSubtle" Color="#2E2F6FEB" />
                     <SolidColorBrush x:Key="UserBubble" Color="#DCE9FF" />
                     <SolidColorBrush x:Key="AssistantBubble" Color="#FFFFFF" />
                     <SolidColorBrush x:Key="DangerBrush" Color="#C62828" />
@@ -44,6 +47,7 @@
                     <SolidColorBrush x:Key="TextSecondary" Color="#9AA0A6" />
                     <SolidColorBrush x:Key="AccentBrush" Color="#5B8DEF" />
                     <SolidColorBrush x:Key="AccentText" Color="#0B1220" />
+                    <SolidColorBrush x:Key="AccentSubtle" Color="#3E5B8DEF" />
                     <SolidColorBrush x:Key="UserBubble" Color="#2B3A52" />
                     <SolidColorBrush x:Key="AssistantBubble" Color="#232629" />
                     <SolidColorBrush x:Key="DangerBrush" Color="#E05252" />
@@ -112,6 +116,30 @@
             <Setter Property="FontSize" Value="11" />
         </Style>
 
+        <!-- 列表项上的删除按钮：平时隐藏，悬停整行时浮现。
+             可见性必须完全交给样式控制——Avalonia 中本地绑定值的优先级高于样式触发器，
+             一旦在使用处再写一个 IsVisible 绑定，这里的规则就全部失效。 -->
+        <Style Selector="Button.rowDelete">
+            <Setter Property="IsVisible" Value="False" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="VerticalAlignment" Value="Top" />
+        </Style>
+        <Style Selector="ListBoxItem:pointerover Button.rowDelete">
+            <Setter Property="IsVisible" Value="True" />
+        </Style>
+        <!-- 确认态下由红色的确认按钮接手，✕ 让位。
+             必须定义在 pointerover 之后，否则悬停时它会被重新显示出来。 -->
+        <Style Selector="Button.rowDelete.confirming">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector="Button.rowDelete:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource HoverOverlay}" />
+        </Style>
+
         <!-- 会话列表项 -->
         <Style Selector="ListBox.sessionList">
             <Setter Property="Background" Value="Transparent" />
@@ -122,9 +150,16 @@
             <Setter Property="Margin" Value="4,1" />
             <Setter Property="CornerRadius" Value="6" />
         </Style>
+        <!-- 注意不要用 Opacity 做高亮：ContentPresenter 是内容的宿主，
+             给它设透明度会把标题与摘要文字一起变淡到几乎看不见。 -->
         <Style Selector="ListBox.sessionList ListBoxItem:selected /template/ ContentPresenter">
-            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="Opacity" Value="0.18" />
+            <Setter Property="Background" Value="{DynamicResource AccentSubtle}" />
+        </Style>
+        <Style Selector="ListBox.sessionList ListBoxItem:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource HoverOverlay}" />
+        </Style>
+        <Style Selector="ListBox.sessionList ListBoxItem:selected:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource AccentSubtle}" />
         </Style>
 
         <!-- 卡片容器 -->
@@ -134,6 +169,17 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="8" />
             <Setter Property="Padding" Value="14" />
+        </Style>
+
+        <!-- 操作结果提示。成功与失败必须一眼可辨——
+             光靠 ✅/⚠️ 前缀在状态栏里很容易被忽略。 -->
+        <Style Selector="TextBlock.status">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="TextBlock.status.error">
+            <Setter Property="Foreground" Value="{DynamicResource DangerBrush}" />
         </Style>
 
         <Style Selector="TextBlock.sectionTitle">

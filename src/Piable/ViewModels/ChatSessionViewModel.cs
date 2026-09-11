@@ -140,6 +140,13 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// 标题栏统计是否显示。
+    /// 既要服从"显示统计信息"偏好，也要避开空会话——那里显示"0条 · 0 · 0.0s"纯属噪音。
+    /// </summary>
+    public bool ShouldShowHeaderStatistics =>
+        _preferences.ShowStatistics && Items.OfType<MessageViewModel>().Any();
+
     /// <summary>当前是否处于可见状态，用于抑制后台会话的滚动请求。</summary>
     public bool IsActive { get; set; }
 
@@ -384,7 +391,7 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
         };
 
         Session.Messages.Add(message);
-        Items.Add(new ToolCallViewModel(payload, _preferences));
+        Items.Add(new ToolCallViewModel(payload));
 
         await _sessions.AppendMessageAsync(Session.Id, message).ConfigureAwait(true);
     }
@@ -413,7 +420,7 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
 
             if (payload is not null)
             {
-                return new ToolCallViewModel(payload, _preferences);
+                return new ToolCallViewModel(payload);
             }
         }
         catch (JsonException)
@@ -517,7 +524,11 @@ public sealed partial class ChatSessionViewModel : ViewModelBase
     }
 
     /// <summary>重新计算标题栏统计。</summary>
-    public void NotifyHeaderChanged() => OnPropertyChanged(nameof(HeaderStatistics));
+    public void NotifyHeaderChanged()
+    {
+        OnPropertyChanged(nameof(HeaderStatistics));
+        OnPropertyChanged(nameof(ShouldShowHeaderStatistics));
+    }
 
     /// <summary>用户改了标题。</summary>
     public void NotifyTitleChanged()

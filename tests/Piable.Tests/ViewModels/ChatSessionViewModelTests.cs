@@ -232,6 +232,40 @@ public class ChatSessionViewModelTests
     }
 
     [Fact]
+    public async Task 空会话不显示标题栏统计()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.SseBody = MockOpenAiServer.BuildSse(["回答"]);
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+
+        // 新会话显示"0条 · 0 · 0.0s"只是噪音
+        Assert.False(h.ViewModel.ShouldShowHeaderStatistics);
+
+        h.ViewModel.InputText = "问题";
+        await h.ViewModel.SendCommand.ExecuteAsync(null);
+
+        Assert.True(h.ViewModel.ShouldShowHeaderStatistics);
+    }
+
+    [Fact]
+    public async Task 关闭统计偏好后标题栏统计一并隐藏()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.SseBody = MockOpenAiServer.BuildSse(["回答"]);
+        var preferences = new UserPreferences { ShowStatistics = false };
+        var h = await CreateAsync(server, preferences);
+        await using var _ = h.Workspace;
+
+        h.ViewModel.InputText = "问题";
+        await h.ViewModel.SendCommand.ExecuteAsync(null);
+
+        // 该偏好声明控制"标题栏与消息"，两处都必须生效
+        Assert.False(h.ViewModel.ShouldShowHeaderStatistics);
+        Assert.False(MessagesOf(h.ViewModel)[1].ShouldShowStatistics);
+    }
+
+    [Fact]
     public async Task 智能体按钮显示当前智能体名称()
     {
         await using var server = MockOpenAiServer.Start();

@@ -125,6 +125,6 @@ public partial class MainWindow : Window
 
     /// <summary>焦点是否在输入框内。只有在这里按 Enter 才发送，避免影响配置页的输入。</summary>
     private bool IsInputFocused() =>
-        TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() is { } focused
+        GetTopLevel(this)?.FocusManager.GetFocusedElement() is { } focused
         && ReferenceEquals(focused, InputBox);
 }

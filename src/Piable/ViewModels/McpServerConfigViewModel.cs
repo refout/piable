@@ -233,17 +233,27 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
         server.Headers = IsHttpTransport ? ParseHeaders(HeadersText) : [];
         server.Enabled = IsEnabled;
 
-        await _config.SaveMcpServerAsync(server).ConfigureAwait(true);
+        try
+        {
+            await _config.SaveMcpServerAsync(server).ConfigureAwait(true);
+
+            // 配置变了，旧连接必须作废，否则下次对话仍用着改之前的连接
+            if (_mcp is not null)
+            {
+                await _mcp.InvalidateAsync(server.Id).ConfigureAwait(true);
+            }
+        }
+        catch (Exception ex)
+        {
+            IsStatusError = true;
+            StatusMessage = $"⚠️ 保存失败：{ChatErrorMapper.ToUserMessage(ex) ?? ex.Message}";
+            _status.ReportError(StatusMessage);
+            return;
+        }
 
         IsStatusError = false;
         StatusMessage = "✅ 已保存";
         _status.ReportSuccess($"MCP 服务器「{server.Name}」已保存");
-
-        // 配置变了，旧连接必须作废，否则下次对话仍用着改之前的连接
-        if (_mcp is not null)
-        {
-            await _mcp.InvalidateAsync(server.Id).ConfigureAwait(true);
-        }
 
         await LoadAsync().ConfigureAwait(true);
         SelectedServer = Servers.FirstOrDefault(s => s.Id == server.Id);

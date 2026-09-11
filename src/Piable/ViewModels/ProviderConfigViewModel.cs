@@ -66,6 +66,7 @@ public sealed partial class ProviderConfigViewModel : ViewModelBase
     private string? _selectedModel;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanFetchModels))]
     private bool _isBusy;
 
     [ObservableProperty]
@@ -98,6 +99,12 @@ public sealed partial class ProviderConfigViewModel : ViewModelBase
     public bool RequiresApiKey => SelectedPreset?.RequiresApiKey ?? true;
 
     public bool SupportsModelFetch => SelectedPreset?.SupportsModelFetch ?? false;
+
+    /// <summary>
+    /// "获取模型列表"是否可点。不支持动态获取的预设（如 Azure 用部署名寻址）
+    /// 必须禁用，否则用户点下去只会收到一个必然失败的请求。
+    /// </summary>
+    public bool CanFetchModels => SupportsModelFetch && !IsBusy;
 
     /// <summary>加载配置页时调用：拉取已有供应商并选中第一个（或默认项）。</summary>
     public async Task LoadAsync(CancellationToken ct = default)
@@ -180,6 +187,7 @@ public sealed partial class ProviderConfigViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsAzure));
         OnPropertyChanged(nameof(RequiresApiKey));
         OnPropertyChanged(nameof(SupportsModelFetch));
+        OnPropertyChanged(nameof(CanFetchModels));
     }
 
     /// <summary>把表单重置为某个预设的默认值（不落库）。</summary>

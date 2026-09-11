@@ -196,10 +196,11 @@ public partial class App : Application
         var availableWidth = screen.WorkingArea.Width / scaling - margin;
         var availableHeight = screen.WorkingArea.Height / scaling - margin;
 
-        // 先按可用区域收窄，再套下限。顺序不能反：若先套 MinWidth，
-        // 屏幕比 MinWidth 还窄时窗口仍会溢出屏幕。
-        window.Width = Math.Min(preferredWidth, Math.Max(320, availableWidth));
-        window.Height = Math.Min(preferredHeight, Math.Max(240, availableHeight));
+        // 收窄到可用区域，但不小于窗口声明的最小尺寸——低于 MinWidth 布局会撑不住。
+        // 若屏幕本身比 MinWidth 还窄，窗口仍然会溢出屏幕；
+        // 那种情况下宁可溢出，也好过把窗口压到连最小可用布局都放不下的尺寸。
+        window.Width = Math.Max(window.MinWidth, Math.Min(preferredWidth, availableWidth));
+        window.Height = Math.Max(window.MinHeight, Math.Min(preferredHeight, availableHeight));
 
         window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
     }
