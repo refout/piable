@@ -52,6 +52,66 @@ public sealed class SessionRepository
         return result;
     }
 
+    /// <summary>
+    /// 按关键词搜索会话：标题或任意一条消息正文包含关键词即命中。
+    ///
+    /// 标题与正文分开统计命中数，是因为界面要能区分"只是标题像"和"确实聊过这个"——
+    /// 后者才是用户真正想找的。
+    /// </summary>
+    public async Task<List<ChatSessionSummary>> SearchAsync(
+        string keyword, int limit = 50, CancellationToken ct = default)
+    {
+        await using var connection = await _database.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT s.Id, s.Title, s.AgentId, s.ProviderId, s.ModelUsed, s.CreatedAt, s.UpdatedAt,
+                   COUNT(m.Id) AS MessageCount,
+                   COALESCE(SUM(m.TotalTokens), 0) AS TotalTokens,
+                   (SELECT COUNT(*) FROM Messages hit
+                    WHERE hit.SessionId = s.Id AND hit.Content LIKE $q ESCAPE '\') AS MatchCount
+            FROM Sessions s
+            LEFT JOIN Messages m ON m.SessionId = s.Id
+            WHERE s.Title LIKE $q ESCAPE '\'
+               OR EXISTS (SELECT 1 FROM Messages hit2
+                          WHERE hit2.SessionId = s.Id AND hit2.Content LIKE $q ESCAPE '\')
+            GROUP BY s.Id
+            ORDER BY s.UpdatedAt DESC
+            LIMIT $limit;
+            """;
+        command.AddParam("$q", $"%{EscapeLike(keyword)}%");
+        command.AddParam("$limit", limit);
+
+        var result = new List<ChatSessionSummary>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            result.Add(new ChatSessionSummary
+            {
+                Id = reader.ReadString("Id"),
+                Title = reader.ReadString("Title"),
+                AgentId = reader.ReadNullableString("AgentId"),
+                ProviderId = reader.ReadNullableString("ProviderId"),
+                ModelUsed = reader.ReadNullableString("ModelUsed"),
+                MessageCount = reader.ReadInt32("MessageCount"),
+                TotalTokens = reader.ReadInt64("TotalTokens"),
+                CreatedAt = reader.ReadDateTimeOffset("CreatedAt"),
+                UpdatedAt = reader.ReadDateTimeOffset("UpdatedAt"),
+                MatchCount = reader.ReadInt32("MatchCount"),
+            });
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 转义 LIKE 的通配符。用户搜 "50%" 或 "_tmp" 时若不转义，
+    /// 前者会退化成"任意后缀"、后者会退化成"任意一个字符"，结果集与预期完全不符。
+    /// </summary>
+    private static string EscapeLike(string keyword) =>
+        keyword.Replace("\\", "\\\\", StringComparison.Ordinal)
+               .Replace("%", "\\%", StringComparison.Ordinal)
+               .Replace("_", "\\_", StringComparison.Ordinal);
+
     /// <summary>读取会话及其全部消息。</summary>
     public async Task<ChatSession?> GetByIdAsync(string id, CancellationToken ct = default)
     {
@@ -156,10 +216,10 @@ public sealed class SessionRepository
             // 同一毫秒内连续写入时会不稳定，故显式维护顺序。
             command.CommandText = """
                 INSERT INTO Messages (
-                    Id, SessionId, Role, Content, Timestamp, StartTime, EndTime, DurationMs,
+                    Id, SessionId, Role, Content, ThinkingContent, Timestamp, StartTime, EndTime, DurationMs,
                     PromptTokens, CompletionTokens, TotalTokens, EstimatedCost, ModelUsed,
                     IsInterrupted, SortOrder)
-                SELECT $id, $sessionId, $role, $content, $timestamp, $startTime, $endTime, $durationMs,
+                SELECT $id, $sessionId, $role, $content, $thinkingContent, $timestamp, $startTime, $endTime, $durationMs,
                        $promptTokens, $completionTokens, $totalTokens, $estimatedCost, $modelUsed,
                        $isInterrupted, COALESCE(MAX(SortOrder), -1) + 1
                 FROM Messages WHERE SessionId = $sessionId;
@@ -169,6 +229,7 @@ public sealed class SessionRepository
             command.AddParam("$sessionId", sessionId);
             command.AddParam("$role", message.Role.ToString());
             command.AddParam("$content", message.Content);
+            command.AddParam("$thinkingContent", message.ThinkingContent);
             command.AddParam("$timestamp", message.Timestamp);
             command.AddParam("$startTime", message.StartTime);
             command.AddParam("$endTime", message.EndTime);
@@ -231,6 +292,7 @@ public sealed class SessionRepository
                     ? role
                     : MessageRole.Assistant,
                 Content = reader.ReadString("Content"),
+                ThinkingContent = reader.ReadNullableString("ThinkingContent"),
                 Timestamp = reader.ReadDateTimeOffset("Timestamp"),
                 StartTime = reader.ReadNullableDateTimeOffset("StartTime"),
                 EndTime = reader.ReadNullableDateTimeOffset("EndTime"),

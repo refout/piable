@@ -117,6 +117,30 @@ public class SessionRepositoryTests
     }
 
     [Fact]
+    public async Task 思考内容可随消息持久化并读回()
+    {
+        await using var workspace = await TestWorkspace.CreateAsync();
+        await SeedReferencesAsync(workspace);
+        await NewSessionAsync(workspace);
+
+        // 回归点：思考模式开启时模型会回传推理过程，这段内容必须入库，
+        // 否则重新打开会话就只剩最终回答、看不到思考过程。
+        await workspace.Sessions.AppendMessageAsync("s1", new ChatMessage
+        {
+            Role = MessageRole.Assistant,
+            Content = "最终回答",
+            ThinkingContent = "让我先拆解一下这个需求……",
+            ModelUsed = "o3-mini",
+        });
+
+        var message = (await workspace.Sessions.GetByIdAsync("s1"))!.Messages.Single();
+
+        Assert.Equal("最终回答", message.Content);
+        Assert.Equal("让我先拆解一下这个需求……", message.ThinkingContent);
+    }
+
+
+    [Fact]
     public async Task 删除会话级联删除其消息()
     {
         await using var workspace = await TestWorkspace.CreateAsync();
@@ -269,6 +293,79 @@ public class SessionRepositoryTests
         var session = await workspace.Sessions.GetByIdAsync("s1");
         Assert.Single(session!.Messages);
         Assert.Equal("首条", session.Messages[0].Content);
+    }
+
+    // ---------------- 搜索 ----------------
+
+    /// <summary>建两个会话，各自带若干条消息，用于验证搜索的命中与计数。</summary>
+    private static async Task SeedForSearchAsync(TestWorkspace workspace)
+    {
+        await SeedReferencesAsync(workspace);
+
+        await NewSessionAsync(workspace, "s1");
+        await workspace.Sessions.UpsertAsync(
+            new ChatSession { Id = "s1", Title = "讨论 Rust 所有权", ProviderId = "p1", AgentId = "a1" });
+        await workspace.Sessions.AppendMessageAsync("s1", new ChatMessage { Content = "所有权规则有三条" });
+        await workspace.Sessions.AppendMessageAsync("s1", new ChatMessage { Content = "借用与生命周期" });
+
+        await NewSessionAsync(workspace, "s2");
+        await workspace.Sessions.UpsertAsync(
+            new ChatSession { Id = "s2", Title = "周末去哪玩", ProviderId = "p1", AgentId = "a1" });
+        await workspace.Sessions.AppendMessageAsync("s2", new ChatMessage { Content = "聊聊 Rust 的学习曲线" });
+    }
+
+    [Fact]
+    public async Task 按标题搜索命中会话()
+    {
+        await using var workspace = await TestWorkspace.CreateAsync();
+        await SeedForSearchAsync(workspace);
+
+        var results = await workspace.Sessions.SearchAsync("周末");
+
+        Assert.Equal(["s2"], results.Select(r => r.Id));
+    }
+
+    [Fact]
+    public async Task 按消息正文搜索命中会话并给出命中条数()
+    {
+        await using var workspace = await TestWorkspace.CreateAsync();
+        await SeedForSearchAsync(workspace);
+
+        var results = await workspace.Sessions.SearchAsync("Rust");
+
+        Assert.Equal(2, results.Count);
+
+        // s1 只因标题含 "Rust" 命中，正文里没有，命中数为 0——
+        // 这正是界面要区分"标题像"与"确实聊过"的依据
+        Assert.Equal(0, results.Single(r => r.Id == "s1").MatchCount);
+        Assert.Equal(2, results.Single(r => r.Id == "s1").MessageCount);
+        Assert.Equal(1, results.Single(r => r.Id == "s2").MatchCount);
+    }
+
+    [Fact]
+    public async Task 搜索区分不出结果时返回空列表()
+    {
+        await using var workspace = await TestWorkspace.CreateAsync();
+        await SeedForSearchAsync(workspace);
+
+        Assert.Empty(await workspace.Sessions.SearchAsync("肯定搜不到的词"));
+    }
+
+    [Fact]
+    public async Task 搜索关键词里的通配符被转义()
+    {
+        await using var workspace = await TestWorkspace.CreateAsync();
+        await SeedForSearchAsync(workspace);
+        await workspace.Sessions.AppendMessageAsync(
+            "s1", new ChatMessage { Content = "进度 100% 完成" });
+
+        // '%' 若不被转义会退化成"任意后缀"，把只含 "100" 之外的会话也捞进来
+        var withWildcard = await workspace.Sessions.SearchAsync("100%");
+        Assert.Equal(["s1"], withWildcard.Select(r => r.Id));
+
+        // '_' 同理：单个字符通配符不应匹配任意字符
+        var underscore = await workspace.Sessions.SearchAsync("s_");
+        Assert.Empty(underscore);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using Piable.Models;
 using Piable.Services;
+using Piable.Services.Tools;
 using Piable.ViewModels;
 
 namespace Piable.Tests.ViewModels;
@@ -12,6 +13,7 @@ public class ChatSessionViewModelTests
 {
     private sealed record Harness(
         TestWorkspace Workspace,
+        TestServices Services,
         ChatSessionViewModel ViewModel,
         StubStatusReporter Status,
         ProviderConfig Provider,
@@ -39,12 +41,123 @@ public class ChatSessionViewModelTests
         var vm = services.CreateChatSessionViewModel(
             session, agents, provider, preferences ?? new UserPreferences(), status);
 
-        return new Harness(workspace, vm, status, provider, agents);
+        return new Harness(workspace, services, vm, status, provider, agents);
     }
 
     /// <summary>对话流里的消息条目（不含工具调用）。</summary>
     private static List<MessageViewModel> MessagesOf(ChatSessionViewModel vm) =>
         [.. vm.Items.OfType<MessageViewModel>()];
+
+    // ---------------- 危险工具逐次确认 ----------------
+
+    /// <summary>装一个允许危险工具的智能体，让模型能请求到 run_shell。</summary>
+    private static async Task<Agent> UseDangerousAgentAsync(Harness h)
+    {
+        var agent = new Agent
+        {
+            Id = "a-danger",
+            Name = "危险助手",
+            AllowDangerousTools = true,
+            SkillIds = [SkillService.ShellSkillId],
+        };
+
+        await h.Services.Config.SaveAgentAsync(agent);
+        h.ViewModel.SelectedAgent = agent;
+        h.ViewModel.InputText = "帮我执行一条命令";
+
+        return agent;
+    }
+
+    /// <summary>轮询等待确认卡片出现。生成是异步进行的，没有同步的介入点。</summary>
+    private static async Task<ToolConfirmationViewModel> WaitForConfirmationAsync(
+        ChatSessionViewModel vm, int timeoutMs = 5000)
+    {
+        var waited = 0;
+        while (waited < timeoutMs)
+        {
+            var card = vm.Items.OfType<ToolConfirmationViewModel>().LastOrDefault();
+            if (card is not null)
+            {
+                return card;
+            }
+
+            await Task.Delay(20);
+            waited += 20;
+        }
+
+        throw new TimeoutException("确认卡片没有出现");
+    }
+
+    [Fact]
+    public async Task 危险工具执行前插入确认卡片_允许后真正执行()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.EnqueueResponse(MockOpenAiServer.BuildToolCallSse(
+            "run_shell", """{"command":"echo confirm-allowed"}"""));
+        server.SseBody = MockOpenAiServer.BuildSse(["已执行。"]);
+
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+        await UseDangerousAgentAsync(h);
+
+        var send = h.ViewModel.SendCommand.ExecuteAsync(null);
+
+        var card = await WaitForConfirmationAsync(h.ViewModel);
+        Assert.Contains("run_shell", card.Headline);
+        Assert.Contains("confirm-allowed", card.ArgumentsText);
+        Assert.False(card.IsResolved);
+
+        card.AllowCommand.Execute(null);
+        await send;
+
+        Assert.True(card.IsResolved);
+        var toolCall = h.ViewModel.Items.OfType<ToolCallViewModel>().Single();
+        Assert.Equal(ToolInvocationStatusPayload.Succeeded, toolCall.Status);
+        Assert.Contains("confirm-allowed", toolCall.ResultText);
+    }
+
+    [Fact]
+    public async Task 拒绝后工具不执行且记录为用户拒绝()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.EnqueueResponse(MockOpenAiServer.BuildToolCallSse(
+            "run_shell", """{"command":"echo must-not-run"}"""));
+        server.SseBody = MockOpenAiServer.BuildSse(["那我换个方式。"]);
+
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+        await UseDangerousAgentAsync(h);
+
+        var send = h.ViewModel.SendCommand.ExecuteAsync(null);
+
+        var card = await WaitForConfirmationAsync(h.ViewModel);
+        card.RejectCommand.Execute(null);
+        await send;
+
+        var toolCall = h.ViewModel.Items.OfType<ToolCallViewModel>().Single();
+        Assert.Equal(ToolInvocationStatusPayload.Declined, toolCall.Status);
+        Assert.DoesNotContain("must-not-run", toolCall.ResultText);
+    }
+
+    [Fact]
+    public async Task 关闭逐次确认后不再插入卡片()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.EnqueueResponse(MockOpenAiServer.BuildToolCallSse(
+            "run_shell", """{"command":"echo no-confirm"}"""));
+        server.SseBody = MockOpenAiServer.BuildSse(["已执行。"]);
+
+        var h = await CreateAsync(server, new UserPreferences { ConfirmDangerousTools = false });
+        await using var _ = h.Workspace;
+        await UseDangerousAgentAsync(h);
+
+        await h.ViewModel.SendCommand.ExecuteAsync(null);
+
+        Assert.Empty(h.ViewModel.Items.OfType<ToolConfirmationViewModel>());
+        Assert.Equal(
+            ToolInvocationStatusPayload.Succeeded,
+            h.ViewModel.Items.OfType<ToolCallViewModel>().Single().Status);
+    }
 
     [Fact]
     public async Task 一轮完整对话产生用户与助手两条消息()
@@ -227,8 +340,8 @@ public class ChatSessionViewModelTests
         h.ViewModel.InputText = "问题";
         await h.ViewModel.SendCommand.ExecuteAsync(null);
 
-        Assert.Contains("💬 2条", h.ViewModel.HeaderStatistics);
-        Assert.Contains("🔢 300", h.ViewModel.HeaderStatistics);
+        Assert.Contains("2条", h.ViewModel.HeaderStatistics);
+        Assert.Contains("300", h.ViewModel.HeaderStatistics);
     }
 
     [Fact]
@@ -329,6 +442,26 @@ public class ChatSessionViewModelTests
     }
 
     [Fact]
+    public async Task 导出为Markdown包含标题智能体与消息正文()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.SseBody = MockOpenAiServer.BuildSse(["你好，世界"]);
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+
+        h.ViewModel.InputText = "帮我写一个快速排序";
+        await h.ViewModel.SendCommand.ExecuteAsync(null);
+
+        var markdown = h.ViewModel.ExportAsMarkdown();
+
+        // 会话已按首条消息自动命名，标题要跟着走
+        Assert.Contains("# 帮我写一个快速排序", markdown);
+        Assert.Contains("通用助手", markdown);
+        Assert.Contains("帮我写一个快速排序", markdown);
+        Assert.Contains("你好，世界", markdown);
+    }
+
+    [Fact]
     public async Task 生成过程会请求滚动到底部()
     {
         await using var server = MockOpenAiServer.Start();
@@ -344,5 +477,84 @@ public class ChatSessionViewModelTests
         await h.ViewModel.SendCommand.ExecuteAsync(null);
 
         Assert.True(scrollRequests > 0);
+    }
+
+    // ---------------- 会话内的模型选择 ----------------
+
+    [Fact]
+    public async Task 会话内选择模型会覆盖供应商默认并作用于请求()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.SseBody = MockOpenAiServer.BuildSse(["回答"]);
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+
+        // 未覆盖时跟随供应商的默认模型
+        Assert.Equal("gpt-4o-mini", h.ViewModel.EffectiveModel);
+        Assert.False(h.ViewModel.HasModelOverride);
+
+        h.ViewModel.ModelOverride = "gpt-4o";
+        Assert.Equal("gpt-4o", h.ViewModel.EffectiveModel);
+        Assert.True(h.ViewModel.HasModelOverride);
+        Assert.Equal("gpt-4o", h.ViewModel.ModelButtonText);
+
+        h.ViewModel.InputText = "问题";
+        await h.ViewModel.SendCommand.ExecuteAsync(null);
+
+        // 请求体里要真的换成新模型，而不是只在按钮上换了个字样
+        var request = server.RequestBodies[^1];
+        Assert.Contains("gpt-4o", request);
+        Assert.DoesNotContain("gpt-4o-mini", request);
+    }
+
+    [Fact]
+    public async Task 跟随默认后回到供应商默认模型()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.SseBody = MockOpenAiServer.BuildSse(["回答"]);
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+
+        h.ViewModel.ModelOverride = "gpt-4o";
+
+        Assert.True(h.ViewModel.ResetModelCommand.CanExecute(null));
+        h.ViewModel.ResetModelCommand.Execute(null);
+
+        Assert.Null(h.ViewModel.ModelOverride);
+        Assert.False(h.ViewModel.HasModelOverride);
+        Assert.Equal("gpt-4o-mini", h.ViewModel.EffectiveModel);
+    }
+
+    [Fact]
+    public async Task 切换供应商后可用模型列表跟着刷新()
+    {
+        await using var server = MockOpenAiServer.Start();
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+
+        h.ViewModel.Provider = new ProviderConfig
+        {
+            Endpoint = server.BaseUrl,
+            ApiKey = "sk-test",
+            DefaultModel = "gpt-4o-mini",
+            Models = ["gpt-4o-mini", "gpt-4o", "gpt-4o-mini"],
+        };
+
+        // 去重后保持原有顺序
+        Assert.Equal(new[] { "gpt-4o-mini", "gpt-4o" }, h.ViewModel.AvailableModels);
+        Assert.Equal("gpt-4o-mini", h.ViewModel.ModelButtonText);
+
+        // 默认模型被配在了列表之外时也要补进去，
+        // 否则界面上"正在用哪个模型"在下拉里找不到对应项
+        h.ViewModel.Provider = new ProviderConfig
+        {
+            Endpoint = server.BaseUrl,
+            ApiKey = "sk-test",
+            DefaultModel = "o3-mini",
+            Models = ["gpt-4o"],
+        };
+
+        Assert.Equal(new[] { "o3-mini", "gpt-4o" }, h.ViewModel.AvailableModels);
+        Assert.Equal("o3-mini", h.ViewModel.EffectiveModel);
     }
 }

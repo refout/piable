@@ -10,7 +10,7 @@ namespace Piable.Services.Storage;
 public sealed class PiableDatabase
 {
     /// <summary>当前结构版本，写入 SQLite 的 user_version 字段。</summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 4;
 
     private readonly string _connectionString;
 
@@ -97,6 +97,18 @@ public sealed class PiableDatabase
         {
             await ExecuteNonQueryAsync(connection, MigrationV2, ct).ConfigureAwait(false);
             version = 2;
+        }
+
+        if (version < 3)
+        {
+            await ExecuteNonQueryAsync(connection, MigrationV3, ct).ConfigureAwait(false);
+            version = 3;
+        }
+
+        if (version < 4)
+        {
+            await ExecuteNonQueryAsync(connection, MigrationV4, ct).ConfigureAwait(false);
+            version = 4;
         }
 
         // 只有真正执行过迁移才写回版本号。
@@ -342,5 +354,24 @@ public sealed class PiableDatabase
     private const string MigrationV2 = """
         ALTER TABLE Agents ADD COLUMN AllowDangerousTools INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE Skills ADD COLUMN ToolName TEXT NOT NULL DEFAULT '';
+        """;
+
+    /// <summary>
+    /// 结构版本 3：供应商增加显示名 Name，用于用户自建的自定义供应商。
+    ///
+    /// 内置预设的名字来自 <c>ProviderPresets</c>（代码里的常量，不落库），
+    /// 但自定义供应商可以有多条、由用户命名，名字只能存在配置里。
+    /// 默认空字符串：内置预设保持"没有自己的名字"，显示时仍用预设名。
+    /// </summary>
+    private const string MigrationV3 = """
+        ALTER TABLE Providers ADD COLUMN Name TEXT NOT NULL DEFAULT '';
+        """;
+
+    /// <summary>
+    /// 结构版本 4：消息增加「思考内容」列，用于持久化扩展思考模式下模型返回的推理过程，
+    /// 重新打开会话时仍能回看。
+    /// </summary>
+    private const string MigrationV4 = """
+        ALTER TABLE Messages ADD COLUMN ThinkingContent TEXT;
         """;
 }

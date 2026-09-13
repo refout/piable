@@ -9,6 +9,9 @@ public sealed class ChatMessage
 
     public string Content { get; set; } = string.Empty;
 
+    /// <summary>模型的推理/思考内容（扩展思考模式）。不保证有值——取决于模型是否返回。</summary>
+    public string? ThinkingContent { get; set; }
+
     public DateTimeOffset Timestamp { get; set; } = DateTimeOffset.Now;
 
     // ---- 以下统计字段仅助手消息会填充 ----

@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Extensions.AI;
+using Piable.Helpers;
 using Piable.Models;
 using Piable.Services.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
@@ -25,7 +26,23 @@ public enum ToolInvocationStatus
 
     /// <summary>被本地的危险工具策略拒绝，未真正执行。</summary>
     Denied,
+
+    /// <summary>用户在本轮的逐次确认中拒绝执行。</summary>
+    Declined,
 }
+
+/// <summary>一次危险工具执行的确认请求，交给调用方决定放行还是拒绝。</summary>
+/// <param name="ToolName">模型实际调用的工具名。</param>
+/// <param name="DisplayName">展示用名称（不带 MCP 服务器前缀）。</param>
+/// <param name="SourceLabel">来源说明，如「技能 · 执行命令」。</param>
+/// <param name="ArgumentsText">模型给出的参数，已摊平成可读文本。</param>
+/// <param name="Description">工具自身的描述，没有则为 null。</param>
+public sealed record ToolConfirmationRequest(
+    string ToolName,
+    string DisplayName,
+    string SourceLabel,
+    string ArgumentsText,
+    string? Description);
 
 /// <summary>一次工具调用的完整记录，供界面展示与审计。</summary>
 public sealed record ToolInvocationRecord
@@ -64,6 +81,9 @@ public sealed record ChatStreamChunk
 
     /// <summary>一次工具调用已完成（含被拒绝的情形）。</summary>
     public ToolInvocationRecord? ToolCall { get; init; }
+
+    /// <summary>模型推理/思考内容的增量（扩展思考模式）。可能为 null。</summary>
+    public string? ReasoningDelta { get; init; }
 }
 
 /// <summary>一次生成请求所需的全部输入。用 record 以便调用方 <c>with</c> 出变体。</summary>
@@ -74,6 +94,12 @@ public sealed record ChatRequest
 
     /// <summary>历史消息，不含系统提示词（由编排器自行拼接）。</summary>
     public required IReadOnlyList<ModelChatMessage> History { get; init; }
+
+    /// <summary>
+    /// 附加上下文（如智能体挂载的 MCP 资源），拼在系统提示词之后。
+    /// 单独成段是为了让模型分清哪部分是角色设定、哪部分是参考材料。
+    /// </summary>
+    public string? ResourceContext { get; init; }
 
     /// <summary>覆盖使用的模型；留空则按智能体与供应商配置解析。</summary>
     public string? Model { get; init; }
@@ -87,6 +113,19 @@ public sealed record ChatRequest
 
     /// <summary>是否允许执行被标记为危险的工具。</summary>
     public bool AllowDangerousTools { get; init; }
+
+    /// <summary>是否开启思考模式（扩展推理）。开启时捕获并展示推理内容，
+    /// 并对支持的模型通过 <c>reasoning_effort</c> 请求推理。</summary>
+    public bool ThinkingEnabled { get; init; }
+
+    /// <summary>
+    /// 危险工具执行前的逐次确认。返回 true 才执行，false 视为用户拒绝。
+    ///
+    /// 为 null 时退回"按智能体一次性授权"：开启 <see cref="AllowDangerousTools"/> 即全部放行。
+    /// 放在请求里而不是编排器上，是因为要不要问、怎么问是界面层的事，
+    /// 编排器只负责在正确的时机调用它。
+    /// </summary>
+    public Func<ToolConfirmationRequest, CancellationToken, Task<bool>>? ConfirmDangerousTool { get; init; }
 
     /// <summary>工具调用的最大轮数，防止模型陷入无限调用。</summary>
     public int MaxToolRounds { get; init; } = 5;
@@ -140,6 +179,17 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             var allowToolsThisRound = toolsEnabled && iteration < maxRounds;
             var options = BuildOptions(request, allowToolsThisRound ? request.Tools : null);
 
+            // 思考模式：仅对原生支持推理的模型显式请求 reasoning_effort，
+            // 其余模型（含 gpt-4o 这类不思考的）不发该参数，避免 API 报错。
+            // DeepSeek-R1 / Qwen-QwQ 等会自动在流里返回推理内容，无需此处请求。
+            if (request.ThinkingEnabled && IsReasoningModel(model))
+            {
+                options.AdditionalProperties = new AdditionalPropertiesDictionary
+                {
+                    ["reasoning_effort"] = "medium",
+                };
+            }
+
             var toolCalls = new List<FunctionCallContent>();
             var assistantContents = new List<AIContent>();
 
@@ -158,6 +208,13 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
                             promptTotal += (int)(usage.Details.InputTokenCount ?? 0);
                             completionTotal += (int)(usage.Details.OutputTokenCount ?? 0);
                             hasUsage = true;
+                            break;
+                        case TextReasoningContent reasoning when request.ThinkingEnabled:
+                            // 扩展思考：把推理增量单独成块转发，不混入最终回答正文。
+                            if (!string.IsNullOrEmpty(reasoning.Text))
+                            {
+                                yield return new ChatStreamChunk { ReasoningDelta = reasoning.Text };
+                            }
                             break;
                     }
                 }
@@ -194,7 +251,8 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
                 ct.ThrowIfCancellationRequested();
 
                 var record = await InvokeToolAsync(
-                    call, descriptors, request.AllowDangerousTools, iteration + 1, ct)
+                    call, descriptors, request.AllowDangerousTools,
+                    request.ConfirmDangerousTool, iteration + 1, ct)
                     .ConfigureAwait(false);
 
                 yield return new ChatStreamChunk { ToolCall = record };
@@ -212,7 +270,7 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         var resolved = string.IsNullOrWhiteSpace(model) ? provider.DefaultModel : model;
         if (string.IsNullOrWhiteSpace(resolved))
         {
-            return new ConnectionTestResult(false, "请先选择或填写一个模型。");
+            return new ConnectionTestResult(false, Loc.Get("Provider.PickModelFirst"));
         }
 
         try
@@ -229,12 +287,12 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
                 .ConfigureAwait(false);
 
             var returnedModel = response.ModelId ?? resolved;
-            return new ConnectionTestResult(true, $"✅ 连接成功（{returnedModel}）");
+            return new ConnectionTestResult(true, Loc.Get("Provider.Connected", returnedModel));
         }
         catch (Exception ex)
         {
             var message = ChatErrorMapper.ToUserMessage(ex, ct.IsCancellationRequested);
-            return new ConnectionTestResult(false, message ?? "❌ 连接失败");
+            return new ConnectionTestResult(false, message ?? Loc.Get("Provider.ConnectFailed"));
         }
     }
 
@@ -249,6 +307,7 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         FunctionCallContent call,
         IReadOnlyDictionary<string, ToolDescriptor> descriptors,
         bool allowDangerousTools,
+        Func<ToolConfirmationRequest, CancellationToken, Task<bool>>? confirmDangerousTool,
         int iteration,
         CancellationToken ct)
     {
@@ -261,11 +320,11 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             {
                 ToolName = call.Name,
                 DisplayName = call.Name,
-                SourceLabel = "未知",
+                SourceLabel = Loc.Get("Common.Unknown"),
                 Risk = ToolRisk.Safe,
                 ArgumentsText = argumentsText,
                 Status = ToolInvocationStatus.Failed,
-                ResultPayload = $"错误：不存在名为 {call.Name} 的工具。",
+                ResultPayload = Loc.Get("Tool.ErrorNotFound", call.Name),
                 Iteration = iteration,
             };
         }
@@ -280,11 +339,39 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
                 Risk = descriptor.Risk,
                 ArgumentsText = argumentsText,
                 Status = ToolInvocationStatus.Denied,
-                ResultPayload =
-                    "错误：该工具被标记为危险操作，当前智能体未获授权执行。"
-                    + "请在智能体设置中开启「允许执行危险工具」，或改用其他方式完成用户的需求。",
+                ResultPayload = Loc.Get("Tool.ErrorDangerous"),
                 Iteration = iteration,
             };
+        }
+
+        // 逐次确认。即便智能体已获得授权，也仍然逐次询问——
+        // "这个智能体可以执行危险工具"与"这一次可以执行"是两件事，
+        // 模型完全可能被某条工具返回值里的提示注入诱导去调用它不该调用的东西。
+        if (descriptor.Risk == ToolRisk.Dangerous && confirmDangerousTool is not null)
+        {
+            var approved = await confirmDangerousTool(
+                new ToolConfirmationRequest(
+                    descriptor.Name,
+                    descriptor.OriginalName ?? descriptor.Name,
+                    descriptor.SourceLabel,
+                    argumentsText,
+                    descriptor.Description),
+                ct).ConfigureAwait(false);
+
+            if (!approved)
+            {
+                return new ToolInvocationRecord
+                {
+                    ToolName = descriptor.Name,
+                    DisplayName = descriptor.OriginalName ?? descriptor.Name,
+                    SourceLabel = descriptor.SourceLabel,
+                    Risk = descriptor.Risk,
+                    ArgumentsText = argumentsText,
+                    Status = ToolInvocationStatus.Declined,
+                    ResultPayload = Loc.Get("Tool.ErrorDeclined"),
+                    Iteration = iteration,
+                };
+            }
         }
 
         var started = System.Diagnostics.Stopwatch.StartNew();
@@ -308,7 +395,7 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
                 Risk = descriptor.Risk,
                 ArgumentsText = argumentsText,
                 Status = ToolInvocationStatus.Succeeded,
-                ResultPayload = result?.ToString() ?? "（工具未返回任何内容）",
+                ResultPayload = result?.ToString() ?? Loc.Get("Tool.NoOutput"),
                 Iteration = iteration,
                 Duration = started.Elapsed,
             };
@@ -329,7 +416,7 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
                 Risk = descriptor.Risk,
                 ArgumentsText = argumentsText,
                 Status = ToolInvocationStatus.Failed,
-                ResultPayload = $"错误：{ex.Message}",
+                ResultPayload = Loc.Get("Tool.ErrorFailed", ex.Message),
                 Iteration = iteration,
                 Duration = started.Elapsed,
             };
@@ -345,7 +432,7 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
     {
         if (arguments is null || arguments.Count == 0)
         {
-            return "（无参数）";
+            return Loc.Get("Common.NoParametersParen");
         }
 
         var builder = new StringBuilder();
@@ -382,9 +469,19 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
     {
         var messages = new List<AiChatMessage>(request.History.Count + 1);
 
-        if (!string.IsNullOrWhiteSpace(request.Agent.SystemPrompt))
+        // 资源上下文接在系统提示词之后合为一条 system 消息。
+        // 拆成两条也能工作，但部分供应商只取第一条 system 消息，合并更稳妥。
+        var systemPrompt = request.Agent.SystemPrompt ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(request.ResourceContext))
         {
-            messages.Add(new AiChatMessage(ChatRole.System, request.Agent.SystemPrompt));
+            systemPrompt = string.IsNullOrWhiteSpace(systemPrompt)
+                ? request.ResourceContext
+                : systemPrompt.TrimEnd() + "\n\n" + request.ResourceContext;
+        }
+
+        if (!string.IsNullOrWhiteSpace(systemPrompt))
+        {
+            messages.Add(new AiChatMessage(ChatRole.System, systemPrompt));
         }
 
         foreach (var message in request.History)
@@ -422,6 +519,24 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         }
 
         return options;
+    }
+
+    /// <summary>
+    /// 判断模型是否原生支持、且需要显式请求推理。
+    /// OpenAI o 系列靠 <c>reasoning_effort</c> 开启；DeepSeek-R1 / Qwen-QwQ 等会自动返回推理，
+    /// 命中它们也无害（多带一个被忽略的参数），但主要为了挡住 gpt-4o 这类不思考的模型。
+    /// 这是启发式，覆盖常见命名；自定义端点的非常规命名可能漏判，后果仅是"开了思考却不推理"。
+    /// </summary>
+    private static bool IsReasoningModel(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            return false;
+        }
+
+        return model.StartsWith("o", StringComparison.OrdinalIgnoreCase)
+            || model.Contains("reasoner", StringComparison.OrdinalIgnoreCase)
+            || model.Contains("qwq", StringComparison.OrdinalIgnoreCase);
     }
 
     private static ChatRole MapRole(MessageRole role) => role switch

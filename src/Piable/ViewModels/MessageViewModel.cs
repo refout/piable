@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LiveMarkdown.Avalonia;
+using Piable.Helpers;
 using Piable.Models;
 using Piable.Services;
 
@@ -22,6 +23,18 @@ public sealed partial class MessageViewModel : ChatItemViewModel
     [ObservableProperty]
     private bool _isStatisticsExpanded;
 
+    /// <summary>思考块是否展开（默认展开，便于直接看到推理过程）。</summary>
+    [ObservableProperty]
+    private bool _isThinkingExpanded = true;
+
+    /// <summary>推理是否仍在进行中（流式生成期间为 true，落库/回答开始后为 false）。
+    /// 驱动思考条显示"思考中"还是"已思考"。</summary>
+    [ObservableProperty]
+    private bool _isThinking;
+
+    partial void OnIsThinkingChanged(bool value) =>
+        OnPropertyChanged(nameof(ThinkingStateLabel));
+
     public MessageViewModel(ChatMessage model, ITokenCostCalculator calculator, UserPreferences preferences)
     {
         Model = model;
@@ -32,6 +45,7 @@ public sealed partial class MessageViewModel : ChatItemViewModel
         // LiveMarkdown 的流式渲染直接订阅这个可观察字符串，
         // 逐段 Append 即可增量重排，无需每次重新解析整篇内容。
         MarkdownBuilder = new ObservableStringBuilder(model.Content);
+        ThinkingBuilder = new ObservableStringBuilder(model.ThinkingContent ?? string.Empty);
     }
 
     public ChatMessage Model { get; }
@@ -39,12 +53,25 @@ public sealed partial class MessageViewModel : ChatItemViewModel
     /// <summary>供 MarkdownRenderer.MarkdownBuilder 绑定的流式 Markdown 源。</summary>
     public ObservableStringBuilder MarkdownBuilder { get; }
 
+    /// <summary>供思考块 MarkdownRenderer 绑定的流式推理源。</summary>
+    public ObservableStringBuilder ThinkingBuilder { get; }
+
     public override bool IsUser => Model.Role == MessageRole.User;
 
     public bool IsAssistant => Model.Role == MessageRole.Assistant;
 
     /// <summary>消息正文。仅在流式生成过程中通过 <see cref="AppendText"/> 变化。</summary>
     public string Content => Model.Content;
+
+    /// <summary>推理/思考内容（可能为 null）。</summary>
+    public string? ThinkingContent => Model.ThinkingContent;
+
+    /// <summary>是否有可展示的推理内容，用于控制思考块的显隐。</summary>
+    public bool HasThinking => !string.IsNullOrEmpty(Model.ThinkingContent);
+
+    /// <summary>思考条的状态文案：推理进行中显示"思考中"，结束后显示"已思考"。</summary>
+    public string ThinkingStateLabel =>
+        IsThinking ? Loc.Get("Chat.ThinkingInProgress") : Loc.Get("Chat.ThinkingDone");
 
     public bool IsInterrupted => Model.IsInterrupted;
 
@@ -65,22 +92,22 @@ public sealed partial class MessageViewModel : ChatItemViewModel
     /// <summary>是否显示费用。费用未知时为 false，避免显示一个无意义的钱图标。</summary>
     public bool HasCost => _preferences.ShowCost && Model.EstimatedCost is not null;
 
-    /// <summary>默认态：<c>⏱ 2.3s │ 🔢 201 tokens</c>。</summary>
+    /// <summary>默认态：<c>2.3s │ 201 tokens</c>。</summary>
     public string StatisticsSummary =>
-        $"⏱ {_calculator.FormatDuration(Model.DurationMs)}   │   🔢 {_calculator.FormatTokens(Model.TotalTokens)} tokens";
+        $"{_calculator.FormatDuration(Model.DurationMs)}   │   {_calculator.FormatTokens(Model.TotalTokens)} tokens";
 
-    /// <summary>展开态：<c>⏱ 2.3s │ 📥 45 │ 📤 156 │ 💰 $0.0003</c>。</summary>
+    /// <summary>展开态：<c>2.3s │ 45 │ 156 │ $0.0003</c>。</summary>
     public string StatisticsDetails
     {
         get
         {
-            var text = $"⏱ {_calculator.FormatDuration(Model.DurationMs)}   │   "
-                       + $"📥 {FormatCount(Model.PromptTokens)}   │   "
-                       + $"📤 {FormatCount(Model.CompletionTokens)}";
+            var text = $"{_calculator.FormatDuration(Model.DurationMs)}   │   "
+                       + $"{FormatCount(Model.PromptTokens)}   │   "
+                       + $"{FormatCount(Model.CompletionTokens)}";
 
             if (HasCost)
             {
-                text += $"   │   💰 {_calculator.FormatCost(Model.EstimatedCost, _preferences.Currency)}";
+                text += $"   │   {_calculator.FormatCost(Model.EstimatedCost, _preferences.Currency)}";
             }
 
             return text;
@@ -103,7 +130,39 @@ public sealed partial class MessageViewModel : ChatItemViewModel
     {
         Model.Content += delta;
         MarkdownBuilder.Append(delta);
+
+        // 回答开始即代表推理阶段结束
+        if (IsThinking)
+        {
+            IsThinking = false;
+        }
+
         OnPropertyChanged(nameof(Content));
+    }
+
+    /// <summary>流式生成过程中追加推理/思考内容。</summary>
+    public void AppendThinking(string delta)
+    {
+        Model.ThinkingContent = (Model.ThinkingContent ?? string.Empty) + delta;
+        ThinkingBuilder.Append(delta);
+
+        // 首段推理到达即进入"思考中"状态
+        if (!IsThinking)
+        {
+            IsThinking = true;
+        }
+
+        OnPropertyChanged(nameof(HasThinking));
+        OnPropertyChanged(nameof(ThinkingContent));
+    }
+
+    /// <summary>标记推理结束（落库或最终回答开始时调用），让思考条切到"已思考"。</summary>
+    public void EndThinking()
+    {
+        if (IsThinking)
+        {
+            IsThinking = false;
+        }
     }
 
     /// <summary>生成结束后一次性写入统计信息。</summary>

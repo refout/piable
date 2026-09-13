@@ -1,3 +1,4 @@
+using Piable.Helpers;
 using Piable.Models;
 using Piable.Services;
 using Piable.ViewModels;
@@ -36,7 +37,7 @@ public class MessageViewModelTests
         var vm = Create(AssistantMessage());
 
         Assert.True(vm.ShouldShowStatistics);
-        Assert.Equal("⏱ 2.3s   │   🔢 201 tokens", vm.StatisticsText);
+        Assert.Equal("2.3s   │   201 tokens", vm.StatisticsText);
     }
 
     [Fact]
@@ -46,7 +47,7 @@ public class MessageViewModelTests
 
         vm.IsStatisticsExpanded = true;
 
-        Assert.Equal("⏱ 2.3s   │   📥 45   │   📤 156   │   💰 $0.00030", vm.StatisticsText);
+        Assert.Equal("2.3s   │   45   │   156   │   $0.00030", vm.StatisticsText);
     }
 
     [Fact]
@@ -55,7 +56,7 @@ public class MessageViewModelTests
         var vm = Create(AssistantMessage(), new UserPreferences { ShowDetailedTokens = true });
 
         Assert.True(vm.ShowDetailedStatistics);
-        Assert.Contains("📥", vm.StatisticsText);
+        Assert.Contains("", vm.StatisticsText);
     }
 
     [Fact]
@@ -73,8 +74,8 @@ public class MessageViewModelTests
         vm.IsStatisticsExpanded = true;
 
         Assert.False(vm.HasCost);
-        Assert.DoesNotContain("💰", vm.StatisticsText);
-        Assert.Contains("📥", vm.StatisticsText);
+        Assert.DoesNotContain("$", vm.StatisticsText);
+        Assert.Contains("156", vm.StatisticsText);
     }
 
     [Fact]
@@ -114,7 +115,7 @@ public class MessageViewModelTests
         Assert.True(vm.HasStatistics);
         Assert.Equal(30, vm.TotalTokens);
         Assert.Equal("gpt-4o-mini", vm.Model.ModelUsed);
-        Assert.Equal("⏱ 1.5s   │   🔢 30 tokens", vm.StatisticsText);
+        Assert.Equal("1.5s   │   30 tokens", vm.StatisticsText);
     }
 
     [Fact]
@@ -148,7 +149,7 @@ public class MessageViewModelTests
         Assert.Null(vm.TotalTokens);
         Assert.True(vm.IsInterrupted);
         Assert.True(vm.HasStatistics);
-        Assert.Equal("⏱ 1.0s   │   🔢 -- tokens", vm.StatisticsText);
+        Assert.Equal("1.0s   │   -- tokens", vm.StatisticsText);
     }
 
     [Fact]
@@ -157,11 +158,57 @@ public class MessageViewModelTests
         var prefs = new UserPreferences();
         var vm = Create(AssistantMessage(), prefs);
         vm.IsStatisticsExpanded = true;
-        Assert.Contains("💰", vm.StatisticsText);
+        Assert.Contains("$", vm.StatisticsText);
 
         prefs.ShowCost = false;
         vm.RefreshStatistics();
 
-        Assert.DoesNotContain("💰", vm.StatisticsText);
+        Assert.DoesNotContain("$", vm.StatisticsText);
+    }
+
+    [Fact]
+    public void 历史消息有思考内容时显示已思考()
+    {
+        var vm = Create(new ChatMessage
+        {
+            Role = MessageRole.Assistant,
+            Content = "回答",
+            ThinkingContent = "推理过程",
+        });
+
+        Assert.True(vm.HasThinking);
+        Assert.False(vm.IsThinking);
+        Assert.Equal(Loc.Get("Chat.ThinkingDone"), vm.ThinkingStateLabel);
+    }
+
+    [Fact]
+    public void 流式推理期间显示思考中_开始回答后切到已思考()
+    {
+        var vm = Create(new ChatMessage { Role = MessageRole.Assistant, Content = "" });
+
+        vm.AppendThinking("让我想想");
+
+        Assert.True(vm.IsThinking);
+        Assert.Equal(Loc.Get("Chat.ThinkingInProgress"), vm.ThinkingStateLabel);
+
+        vm.AppendText("好的");
+
+        Assert.False(vm.IsThinking);
+        Assert.Equal(Loc.Get("Chat.ThinkingDone"), vm.ThinkingStateLabel);
+        Assert.Equal("好的", vm.Content);
+    }
+
+    [Fact]
+    public void 纯推理消息落库时由EndThinking切到已思考()
+    {
+        var vm = Create(new ChatMessage { Role = MessageRole.Assistant, Content = "" });
+
+        vm.AppendThinking("只有推理没有回答");
+        Assert.Equal(Loc.Get("Chat.ThinkingInProgress"), vm.ThinkingStateLabel);
+
+        vm.EndThinking();
+
+        Assert.False(vm.IsThinking);
+        Assert.Equal(Loc.Get("Chat.ThinkingDone"), vm.ThinkingStateLabel);
     }
 }

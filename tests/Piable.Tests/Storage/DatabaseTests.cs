@@ -84,6 +84,67 @@ public class DatabaseTests
         Assert.Equal(1L, (long)(await command.ExecuteScalarAsync())!);
     }
 
+    /// <summary>
+    /// 老库（结构版本 2，Providers 还没有 Name 列）升级后，自定义供应商的名字要能存能读。
+    /// 回归点：SchemaV1 是"历史版本"的建表语句，新列只能靠后续迁移补，
+    /// 一旦漏了这段迁移，写自定义供应商就会直接报"没有 Name 列"。
+    /// </summary>
+    [Fact]
+    public async Task 老库升级后供应商名字列可用()
+    {
+        await using var workspace = await TestWorkspace.CreateAsync();
+
+        await using (var connection = await workspace.Database.OpenConnectionAsync())
+        {
+            await using var drop = connection.CreateCommand();
+            drop.CommandText = "ALTER TABLE Providers DROP COLUMN Name;";
+            await drop.ExecuteNonQueryAsync();
+
+            // 一并拆掉 v2 之后新增的列，让模拟出来的库是“货真价实的 v2”形状：
+            // 否则 InitializeAsync 升级到 v4 时会再次执行 ADD COLUMN ThinkingContent，
+            // 而该列在全新建好的库里已经存在，会报重复列错误。
+            await using var dropThinking = connection.CreateCommand();
+            dropThinking.CommandText = "ALTER TABLE Messages DROP COLUMN ThinkingContent;";
+            await dropThinking.ExecuteNonQueryAsync();
+
+            await using var version = connection.CreateCommand();
+            version.CommandText = "PRAGMA user_version = 2;";
+            await version.ExecuteNonQueryAsync();
+        }
+
+        await workspace.Database.InitializeAsync();
+
+        await workspace.Providers.UpsertAsync(new ProviderConfig
+        {
+            Id = "p1",
+            PresetId = ProviderPresets.Custom,
+            Name = "公司网关",
+            DefaultModel = "gpt-4o-mini",
+        });
+
+        var saved = (await workspace.Providers.GetAllAsync()).Single();
+        Assert.Equal("公司网关", saved.Name);
+        Assert.Equal("公司网关", saved.DisplayName);
+    }
+
+    [Fact]
+    public async Task 内置供应商不存名字_显示时用预设名()
+    {
+        await using var workspace = await TestWorkspace.CreateAsync();
+
+        await workspace.Providers.UpsertAsync(new ProviderConfig
+        {
+            Id = "p1",
+            PresetId = ProviderPresets.OpenAi,
+            DefaultModel = "gpt-4o-mini",
+        });
+
+        var saved = (await workspace.Providers.GetAllAsync()).Single();
+        Assert.Equal(string.Empty, saved.Name);
+        Assert.Equal("OpenAI", saved.DisplayName);
+        Assert.False(saved.IsCustom);
+    }
+
     [Fact]
     public async Task 备份产出可独立打开的完整快照()
     {
