@@ -261,7 +261,7 @@
                       IsVisible="{Binding !IsConfigView}">
 
                     <!-- 标题栏 -->
-                    <Border Grid.Row="0" Padding="18,12"
+                    <Border Grid.Row="0" Name="ConversationHeader" Padding="18,12"
                             Background="{DynamicResource SurfaceBackground}"
                             BorderBrush="{DynamicResource BorderSubtle}"
                             BorderThickness="0,0,0,1">
@@ -511,7 +511,7 @@
                     </ScrollViewer>
 
                     <!-- 输入区 -->
-                    <Border Grid.Row="2" Padding="14,10"
+                    <Border Grid.Row="2" Name="MessageInputArea" Padding="14,10"
                             Background="{DynamicResource SurfaceBackground}"
                             BorderBrush="{DynamicResource BorderSubtle}"
                             BorderThickness="0,1,0,0">
@@ -744,7 +744,7 @@
                 <!-- ======== 配置视图 ======== -->
                 <Grid RowDefinitions="Auto,*" IsVisible="{Binding IsConfigView}">
 
-                    <Border Grid.Row="0" Padding="18,12"
+                    <Border Grid.Row="0" Name="ConfigHeader" Padding="18,12"
                             Background="{DynamicResource SurfaceBackground}"
                             BorderBrush="{DynamicResource BorderSubtle}"
                             BorderThickness="0,0,0,1">

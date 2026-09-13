@@ -311,5 +311,25 @@ public partial class App : Application
 
         window.Bind(Avalonia.Controls.TopLevel.BackgroundProperty,
             new DynamicResourceExtension(mode == "Off" ? "AppBackground" : "WindowTint"));
+
+        // 结构性面板：开启模糊时改全透明，让窗口级 Mica/Acrylic 材质透出，实现全局模糊；
+        // 关闭时回到各自的不透明底色。窗口尚未就绪时 FindControl 可能返回 null，
+        // 那时保留 XAML 里的默认不透明底色即可（下一次模糊/主题变更会再绑定）。
+        BindStructuralBackground(window.FindControl<Border>("LeftPanel"), "PanelBackground", mode);
+        BindStructuralBackground(window.FindControl<Border>("ConversationHeader"), "SurfaceBackground", mode);
+        BindStructuralBackground(window.FindControl<Border>("MessageInputArea"), "SurfaceBackground", mode);
+        BindStructuralBackground(window.FindControl<Border>("ConfigHeader"), "SurfaceBackground", mode);
+    }
+
+    private static void BindStructuralBackground(Border? control, string opaqueKey, string mode)
+    {
+        if (control is null)
+        {
+            return;
+        }
+
+        control.Bind(
+            Border.BackgroundProperty,
+            new DynamicResourceExtension(mode == "Off" ? opaqueKey : "BlurTransparent"));
     }
 }
