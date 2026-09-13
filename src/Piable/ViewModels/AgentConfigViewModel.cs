@@ -1,11 +1,51 @@
 using System.Collections.ObjectModel;
+using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Piable.Helpers;
 using Piable.Models;
 using Piable.Services;
 using Piable.Services.Tools;
 
 namespace Piable.ViewModels;
+
+/// <summary>智能体编辑页里一个可挂载的 MCP 资源。</summary>
+public sealed partial class SelectableResourceViewModel : ViewModelBase
+{
+    public SelectableResourceViewModel(McpResourceDescriptor resource)
+    {
+        Uri = resource.Uri;
+        Name = resource.DisplayName;
+        Detail = string.IsNullOrWhiteSpace(resource.MimeType)
+            ? resource.ServerName
+            : $"{resource.ServerName} · {resource.MimeType}";
+        IsTemplate = resource.IsTemplate;
+        Description = resource.Description;
+    }
+
+    public string Uri { get; }
+
+    public string Name { get; }
+
+    public string Detail { get; }
+
+    public string? Description { get; }
+
+    /// <summary>
+    /// 资源模板（URI 带占位符）不能直接读，因此不允许挂载——
+    /// 让它能勾上只会在生成时得到一条读失败的警告。
+    /// </summary>
+    public bool IsTemplate { get; }
+
+    public bool CanMount => !IsTemplate;
+
+    public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
+
+    [ObservableProperty]
+    private bool _isSelected;
+}
 
 /// <summary>「配置 → 智能体管理」标签页。</summary>
 public sealed partial class AgentConfigViewModel : ViewModelBase
@@ -13,9 +53,17 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
     private readonly IConfigService _config;
     private readonly ISkillService _skills;
     private readonly IStatusReporter _status;
+    private readonly IMcpClientService? _mcp;
 
     /// <summary>正在编辑的智能体副本。改动先落在这里，点保存才写库。</summary>
     private Agent? _editing;
+
+    /// <summary>
+    /// 已挂载的资源 URI。独立于 <see cref="AvailableResources"/> 维护：
+    /// 资源列表要连上 MCP 服务器才拿得到，而保存不该依赖于"用户点过刷新"——
+    /// 否则没点刷新就保存，会把之前挂载的资源无声地清空。
+    /// </summary>
+    private readonly List<string> _mountedResourceUris = [];
 
     [ObservableProperty]
     private AgentListItemViewModel? _selectedAgent;
@@ -45,6 +93,9 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
     [ObservableProperty]
     private double _topP = 1.0;
 
+    /// <summary>是否有可导出的内容（已选中的智能体，或正在编辑的草稿）。</summary>
+    public bool CanExport => _editing is not null;
+
     /// <summary>
     /// 是否允许执行被标记为危险的工具。
     /// 默认关闭，需要用户按智能体显式打开（模型可能被提示注入诱导去调用危险工具）。
@@ -62,6 +113,16 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
 
     public bool HasAvailableMcpServers => AvailableMcpServers.Count > 0;
 
+    public bool HasAvailableResources => AvailableResources.Count > 0;
+
+    /// <summary>正在拉取资源列表。连接 MCP 服务器可能要等子进程启动，得给个反馈。</summary>
+    [ObservableProperty]
+    private bool _isLoadingResources;
+
+    /// <summary>正在保存智能体。保存会写库并重新加载列表，期间禁用保存按钮并显示转圈。</summary>
+    [ObservableProperty]
+    private bool _isBusy;
+
     [ObservableProperty]
     private string _statusMessage = string.Empty;
 
@@ -71,11 +132,16 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
     partial void OnAllowDangerousToolsChanged(bool value) =>
         OnPropertyChanged(nameof(HasUngrantedDangerousSkill));
 
-    public AgentConfigViewModel(IConfigService config, ISkillService skills, IStatusReporter status)
+    public AgentConfigViewModel(
+        IConfigService config,
+        ISkillService skills,
+        IStatusReporter status,
+        IMcpClientService? mcp = null)
     {
         _config = config;
         _skills = skills;
         _status = status;
+        _mcp = mcp;
     }
 
     public ObservableCollection<AgentListItemViewModel> Agents { get; } = [];
@@ -85,6 +151,12 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
 
     /// <summary>可关联的 MCP 服务器。</summary>
     public ObservableCollection<SelectableLinkViewModel> AvailableMcpServers { get; } = [];
+
+    /// <summary>
+    /// 已关联 MCP 服务器提供的资源。需要点"刷新"才会拉取——
+    /// 打开编辑页就挨个连服务器，会让页面在有多台 Stdio 服务器时卡上好几秒。
+    /// </summary>
+    public ObservableCollection<SelectableResourceViewModel> AvailableResources { get; } = [];
 
     /// <summary>智能体列表发生变化（增删改或改了默认项），主窗口需要重新读取。</summary>
     public event EventHandler? AgentsChanged;
@@ -192,7 +264,7 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
             AvailableSkills.Add(new SelectableLinkViewModel(
                 skill.Id,
                 skill.Name,
-                skill.Enabled ? handler?.DisplayName ?? skill.Handler : "已停用",
+                skill.Enabled ? handler?.DisplayName ?? skill.Handler : Loc.Get("Skill.Disabled"),
                 handler?.Risk == ToolRisk.Dangerous)
             {
                 IsSelected = skillIds.Contains(skill.Id),
@@ -215,8 +287,128 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
 
         AttachLinkHandlers();
 
+        _mountedResourceUris.Clear();
+        _mountedResourceUris.AddRange(agent.McpResourceUris);
+
+        // 资源列表留到用户点刷新再拉，这里只清掉上一份，避免张冠李戴
+        DetachResourceHandlers();
+        AvailableResources.Clear();
+        OnPropertyChanged(nameof(HasAvailableResources));
+
         OnPropertyChanged(nameof(HasAvailableSkills));
         OnPropertyChanged(nameof(HasAvailableMcpServers));
+    }
+
+    /// <summary>
+    /// 拉取已关联 MCP 服务器的资源清单。
+    /// 单台服务器连不上不影响其他服务器——这点与工具发现保持一致。
+    /// </summary>
+    [RelayCommand]
+    private async Task RefreshResourcesAsync()
+    {
+        if (_mcp is null)
+        {
+            return;
+        }
+
+        IsLoadingResources = true;
+        StatusMessage = Loc.Get("Agent.ReadingResources");
+        IsStatusError = false;
+
+        var selected = AvailableMcpServers.Where(s => s.IsSelected)
+            .Select(s => s.Id)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var collected = new List<SelectableResourceViewModel>();
+        var errors = new List<string>();
+
+        try
+        {
+            var servers = await _config.GetMcpServersAsync().ConfigureAwait(true);
+
+            foreach (var server in servers.Where(s => s.Enabled && selected.Contains(s.Id)))
+            {
+                try
+                {
+                    foreach (var resource in await _mcp.GetResourcesAsync(server).ConfigureAwait(true))
+                    {
+                        collected.Add(new SelectableResourceViewModel(resource)
+                        {
+                            IsSelected = _mountedResourceUris.Contains(resource.Uri),
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"「{server.Name}」：{ex.Message}");
+                }
+            }
+        }
+        finally
+        {
+            IsLoadingResources = false;
+        }
+
+        DetachResourceHandlers();
+        AvailableResources.Clear();
+
+        foreach (var item in collected.OrderBy(r => r.Detail, StringComparer.Ordinal)
+                                      .ThenBy(r => r.Name, StringComparer.Ordinal))
+        {
+            AvailableResources.Add(item);
+        }
+
+        AttachResourceHandlers();
+        OnPropertyChanged(nameof(HasAvailableResources));
+
+        if (errors.Count > 0)
+        {
+            IsStatusError = true;
+            StatusMessage = string.Join(Environment.NewLine, errors);
+            return;
+        }
+
+        IsStatusError = false;
+        StatusMessage = collected.Count == 0
+            ? Loc.Get("Agent.NoResources")
+            : Loc.Get("Agent.ResourcesFound", collected.Count);
+    }
+
+    private void AttachResourceHandlers()
+    {
+        foreach (var item in AvailableResources)
+        {
+            item.PropertyChanged += OnResourceSelectionChanged;
+        }
+    }
+
+    private void DetachResourceHandlers()
+    {
+        foreach (var item in AvailableResources)
+        {
+            item.PropertyChanged -= OnResourceSelectionChanged;
+        }
+    }
+
+    private void OnResourceSelectionChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(SelectableResourceViewModel.IsSelected)
+            || sender is not SelectableResourceViewModel item)
+        {
+            return;
+        }
+
+        if (item.IsSelected)
+        {
+            if (!_mountedResourceUris.Contains(item.Uri))
+            {
+                _mountedResourceUris.Add(item.Uri);
+            }
+        }
+        else
+        {
+            _mountedResourceUris.Remove(item.Uri);
+        }
     }
 
     private void AttachLinkHandlers()
@@ -255,7 +447,7 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
         SelectedAgent = null;
         _editing = new Agent
         {
-            Name = "新智能体",
+            Name = Loc.Get("Agent.NewName"),
             SystemPrompt = "你是一个乐于助人的 AI 助手。",
         };
 
@@ -274,7 +466,12 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
             link.IsSelected = false;
         }
 
-        StatusMessage = "填写后点击保存即可创建";
+        _mountedResourceUris.Clear();
+        DetachResourceHandlers();
+        AvailableResources.Clear();
+        OnPropertyChanged(nameof(HasAvailableResources));
+
+        StatusMessage = Loc.Get("Agent.FillToCreate");
         IsStatusError = false;
     }
 
@@ -289,49 +486,146 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
         if (string.IsNullOrWhiteSpace(Name))
         {
             IsStatusError = true;
-            StatusMessage = "⚠️ 名称不能为空";
+            StatusMessage = Loc.Get("Common.NameRequired");
             return;
         }
 
-        _editing.Name = Name.Trim();
-        _editing.Description = string.IsNullOrWhiteSpace(Description) ? null : Description.Trim();
-        _editing.SystemPrompt = SystemPrompt;
-        _editing.AllowDangerousTools = AllowDangerousTools;
-        _editing.SkillIds = [.. AvailableSkills.Where(s => s.IsSelected).Select(s => s.Id)];
-        _editing.McpServerIds = [.. AvailableMcpServers.Where(s => s.IsSelected).Select(s => s.Id)];
+        var agent = BuildFromForm();
+        _editing = agent;
 
-        if (FollowProviderDefaults)
-        {
-            _editing.Model = null;
-            _editing.Temperature = null;
-            _editing.MaxTokens = null;
-            _editing.TopP = null;
-        }
-        else
-        {
-            _editing.Model = string.IsNullOrWhiteSpace(Model) ? null : Model.Trim();
-            _editing.Temperature = Temperature;
-            _editing.MaxTokens = MaxTokens;
-            _editing.TopP = TopP;
-        }
-
+        IsBusy = true;
         try
         {
-            await _config.SaveAgentAsync(_editing).ConfigureAwait(true);
+            await _config.SaveAgentAsync(agent).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
-            ReportFailure("保存失败", ex);
+            ReportFailure(Loc.Get("Common.SaveFailed"), ex);
             return;
+        }
+        finally
+        {
+            IsBusy = false;
         }
 
         IsStatusError = false;
-        StatusMessage = "✅ 已保存";
-        _status.ReportSuccess($"智能体「{_editing.Name}」已保存");
+        StatusMessage = Loc.Get("Common.Saved");
+        _status.ReportSuccess(Loc.Get("Agent.Saved", agent.Name));
 
-        var id = _editing.Id;
+        var id = agent.Id;
         await ReloadAsync().ConfigureAwait(true);
         SelectedAgent = Agents.FirstOrDefault(a => a.Id == id);
+    }
+
+    /// <summary>
+    /// 按当前表单内容构造一个智能体对象。
+    /// 保存与导出共用这一份构造逻辑——分头写就会出现"导出去的和存下来的不一样"。
+    /// 不改动 <see cref="_editing"/>，导出草稿时不会把未保存的值写进编辑副本。
+    /// </summary>
+    private Agent BuildFromForm()
+    {
+        var agent = new Agent
+        {
+            // Id 与创建时间沿用编辑副本；全新草稿在这里拿到新 Id
+            Id = _editing?.Id ?? Guid.NewGuid().ToString("n"),
+            Name = Name.Trim(),
+            Description = string.IsNullOrWhiteSpace(Description) ? null : Description.Trim(),
+            SystemPrompt = SystemPrompt,
+            AllowDangerousTools = AllowDangerousTools,
+            SkillIds = [.. AvailableSkills.Where(s => s.IsSelected).Select(s => s.Id)],
+            McpServerIds = [.. AvailableMcpServers.Where(s => s.IsSelected).Select(s => s.Id)],
+            McpResourceUris = [.. _mountedResourceUris],
+            IsDefault = _editing?.IsDefault ?? false,
+            IsBuiltIn = _editing?.IsBuiltIn ?? false,
+            CreatedAt = _editing?.CreatedAt ?? DateTimeOffset.Now,
+        };
+
+        if (!FollowProviderDefaults)
+        {
+            agent.Model = string.IsNullOrWhiteSpace(Model) ? null : Model.Trim();
+            agent.Temperature = Temperature;
+            agent.MaxTokens = MaxTokens;
+            agent.TopP = TopP;
+        }
+
+        return agent;
+    }
+
+    /// <summary>
+    /// 把当前表单内容序列化为 JSON 文本，供导出到文件。
+    ///
+    /// 绕开默认的转义编码器：System.Text.Json 默认会把非 ASCII 字符写成
+    /// <c>\uXXXX</c>，中文提示词会变成一长串看不懂的转义，
+    /// 而导出文件的用途之一就是让人打开来改。这里仍是同一个源生成器上下文，
+    /// 只是换掉了写出时的编码器。
+    /// </summary>
+    public string ExportToJson()
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(
+                   stream,
+                   new JsonWriterOptions
+                   {
+                       Indented = true,
+                       Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                   }))
+        {
+            JsonSerializer.Serialize(writer, BuildFromForm(), PiableJsonContext.Default.Agent);
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>
+    /// 从 JSON 文本导入一个智能体并落库。
+    /// 文件对话框由视图发起，这里只负责解析与保存，便于脱离界面测试。
+    /// </summary>
+    public async Task ImportFromJsonAsync(string json)
+    {
+        Agent? agent;
+        try
+        {
+            agent = JsonSerializer.Deserialize(json, PiableJsonContext.Default.Agent);
+        }
+        catch (JsonException)
+        {
+            IsStatusError = true;
+            StatusMessage = Loc.Get("Agent.ImportBadJson");
+            return;
+        }
+
+        if (agent is null || string.IsNullOrWhiteSpace(agent.Name))
+        {
+            IsStatusError = true;
+            StatusMessage = Loc.Get("Agent.ImportNoName");
+            return;
+        }
+
+        // 外部文件的这几个标记一律不采信：
+        // - Id 重新生成，导入不会覆盖本机已有的智能体（重名也会另存一条）
+        // - IsBuiltIn 若被带入，导入的智能体就变成"不可删除"了
+        // - IsDefault 若被带入，一次导入会悄悄改掉全局默认智能体
+        agent.Id = Guid.NewGuid().ToString("n");
+        agent.IsBuiltIn = false;
+        agent.IsDefault = false;
+        agent.CreatedAt = DateTimeOffset.Now;
+
+        try
+        {
+            await _config.SaveAgentAsync(agent).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ReportFailure(Loc.Get("Agent.ImportFailed"), ex);
+            return;
+        }
+
+        await ReloadAsync().ConfigureAwait(true);
+        SelectedAgent = Agents.FirstOrDefault(a => a.Id == agent.Id);
+
+        IsStatusError = false;
+        StatusMessage = Loc.Get("Agent.Imported", agent.Name);
+        _status.ReportSuccess(StatusMessage);
     }
 
     [RelayCommand]
@@ -350,7 +644,7 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            ReportFailure("设为默认失败", ex);
+            ReportFailure(Loc.Get("Agent.SetDefaultFailed"), ex);
             return;
         }
 
@@ -358,7 +652,7 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
         await ReloadAsync().ConfigureAwait(true);
         SelectedAgent = Agents.FirstOrDefault(a => a.Id == id);
 
-        _status.ReportSuccess($"已将「{Name}」设为默认智能体");
+        _status.ReportSuccess(Loc.Get("Agent.SetDefault", Name));
     }
 
     /// <summary>
@@ -370,8 +664,8 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
     {
         var reason = ChatErrorMapper.ToUserMessage(ex) ?? ex.Message;
         IsStatusError = true;
-        StatusMessage = $"⚠️ {action}：{reason}";
-        _status.ReportError($"⚠️ {action}：{reason}");
+        StatusMessage = Loc.Get("Common.FailureFormat", action, reason);
+        _status.ReportError(Loc.Get("Common.FailureFormat", action, reason));
     }
 
     [RelayCommand]
@@ -397,7 +691,7 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
         TopP = 1.0;
 
         IsStatusError = false;
-        StatusMessage = "已恢复默认提示词，点击保存后生效";
+        StatusMessage = Loc.Get("Agent.RestoredDefaults");
     }
 
     /// <summary>删除智能体。由列表项二次确认后调用。</summary>
@@ -409,7 +703,7 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            ReportFailure("删除失败", ex);
+            ReportFailure(Loc.Get("Common.DeleteFailed"), ex);
             return;
         }
 
@@ -419,10 +713,10 @@ public sealed partial class AgentConfigViewModel : ViewModelBase
         // 否则界面会报"已删除"而列表里那条还在。
         if (Agents.Any(a => a.Id == agentId))
         {
-            _status.ReportError("内置智能体不可删除");
+            _status.ReportError(Loc.Get("Agent.BuiltInUndeletable"));
             return;
         }
 
-        _status.ReportSuccess("智能体已删除");
+        _status.ReportSuccess(Loc.Get("Agent.Deleted"));
     }
 }

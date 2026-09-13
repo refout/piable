@@ -25,6 +25,14 @@ public sealed class Agent
     /// <summary>关联的 MCP 服务器 ID 列表。</summary>
     public List<string> McpServerIds { get; set; } = [];
 
+    /// <summary>
+    /// 挂载的 MCP 资源 URI。生成时把它们的内容读出来，附在系统提示词之后。
+    ///
+    /// 存 URI 而不是内容：资源会变，每次生成都重新读取才有意义；
+    /// 把几万字的快照塞进智能体配置里，只会得到一个永远过时的副本。
+    /// </summary>
+    public List<string> McpResourceUris { get; set; } = [];
+
     /// <summary>关联的技能 ID 列表。</summary>
     public List<string> SkillIds { get; set; } = [];
 

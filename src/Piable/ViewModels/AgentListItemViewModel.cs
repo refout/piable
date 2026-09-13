@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Piable.Helpers;
 using Piable.Models;
 
 namespace Piable.ViewModels;
@@ -32,16 +33,8 @@ public sealed partial class AgentListItemViewModel : InlineConfirmViewModel
     [ObservableProperty]
     private bool _isDefault;
 
-    /// <summary>行标题，带默认与内置标记。</summary>
-    public string DisplayName
-    {
-        get
-        {
-            var prefix = IsDefault ? "★ " : "📌 ";
-            var suffix = IsBuiltIn ? "（内置）" : string.Empty;
-            return prefix + Name + suffix;
-        }
-    }
+    /// <summary>行标题。默认智能体在界面上用星标图标（Star）标记，内置智能体带后缀。</summary>
+    public string DisplayName => Name + (IsBuiltIn ? Loc.Get("Agent.BuiltInSuffix") : string.Empty);
 
     public void Update(Agent agent)
     {

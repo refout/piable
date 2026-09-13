@@ -140,6 +140,96 @@ public class AgentConfigViewModelTests
     }
 
     [Fact]
+    public async Task 导出再导入得到一条内容相同的新智能体()
+    {
+        var (workspace, vm, _) = await CreateAsync();
+        await using var _w = workspace;
+
+        // 新建一个草稿再保存：直接改表单会落在内置智能体身上，测不出"导出的是新建的这条"
+        vm.NewAgentCommand.Execute(null);
+        var skill = vm.AvailableSkills.Single(s => s.Name == "执行命令");
+        skill.IsSelected = true;
+        vm.Name = "可搬运的助手";
+        vm.Description = "导出用";
+        vm.SystemPrompt = "你是一个搬运工。";
+
+        await vm.SaveCommand.ExecuteAsync(null);
+        var exportedId = vm.Agents.Single(a => a.Name == "可搬运的助手").Id;
+        Assert.NotEqual(ConfigService.GeneralAgentId, exportedId);
+
+        var json = vm.ExportToJson();
+        Assert.Contains("可搬运的助手", json);
+        Assert.Contains("你是一个搬运工。", json);
+
+        await vm.ImportFromJsonAsync(json);
+
+        var services = TestServices.Create(workspace);
+        var imported = (await services.Config.GetAgentsAsync())
+            .Single(a => a.Name == "可搬运的助手" && a.Id != exportedId);
+
+        Assert.Equal("你是一个搬运工。", imported.SystemPrompt);
+        Assert.Equal("导出用", imported.Description);
+        Assert.Contains(SkillService.ShellSkillId, imported.SkillIds);
+        Assert.False(vm.IsStatusError);
+    }
+
+    [Fact]
+    public async Task 导入不会覆盖已有智能体也不会带入内置标记()
+    {
+        var (workspace, vm, _) = await CreateAsync();
+        await using var _w = workspace;
+
+        // 手工构造一份"恶意"内容：声称自己是内置的、且沿用已有智能体的 Id
+        var existingId = vm.Agents.Single(a => a.Id == ConfigService.GeneralAgentId).Id;
+        var json = $$"""
+        {
+          "id": "{{existingId}}",
+          "name": "伪装的智能体",
+          "systemPrompt": "x",
+          "isBuiltIn": true,
+          "isDefault": true
+        }
+        """;
+
+        await vm.ImportFromJsonAsync(json);
+
+        var services = TestServices.Create(workspace);
+        var agents = await services.Config.GetAgentsAsync();
+
+        // 原有智能体没有被覆盖
+        var original = agents.Single(a => a.Id == existingId);
+        Assert.Equal("通用助手", original.Name);
+
+        // 导入的这条是新的，且不带内置/默认标记——否则它既删不掉又悄悄改了默认智能体
+        var imported = agents.Single(a => a.Name == "伪装的智能体");
+        Assert.NotEqual(existingId, imported.Id);
+        Assert.False(imported.IsBuiltIn);
+        Assert.False(imported.IsDefault);
+    }
+
+    [Fact]
+    public async Task 导入无效内容时给出提示而不是抛异常()
+    {
+        var (workspace, vm, _) = await CreateAsync();
+        await using var _w = workspace;
+
+        await vm.ImportFromJsonAsync("这不是 JSON");
+
+        Assert.True(vm.IsStatusError);
+        Assert.Contains("导入失败", vm.StatusMessage);
+    }
+
+    [Fact]
+    public async Task 未选择智能体时没有可导出的内容()
+    {
+        var (workspace, vm, _) = await CreateAsync();
+        await using var _w = workspace;
+
+        vm.SelectedAgent = null;
+        Assert.False(vm.CanExport);
+    }
+
+    [Fact]
     public async Task 名称留空时拒绝保存并给出提示()
     {
         var (workspace, vm, _) = await CreateAsync();
