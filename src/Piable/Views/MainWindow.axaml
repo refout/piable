@@ -2,8 +2,11 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Piable.ViewModels"
         xmlns:models="using:Piable.Models"
+        xmlns:services="using:Piable.Services"
+        xmlns:ic="using:FluentIcons.Avalonia"
         xmlns:tools="using:Piable.Services.Tools"
         xmlns:lm="using:LiveMarkdown.Avalonia"
+        xmlns:helpers="using:Piable.Helpers"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="720"
@@ -12,7 +15,8 @@
         Icon="/Assets/logo.png"
         Width="1100" Height="720"
         MinWidth="560" MinHeight="400"
-        Background="{DynamicResource AppBackground}"
+        Background="{DynamicResource WindowTint}"
+        TransparencyBackgroundFallback="{DynamicResource AppBackground}"
         Title="Piable">
 
     <Window.Styles>
@@ -70,22 +74,60 @@
             <Setter Property="Padding" Value="8,6" />
         </Style>
 
-        <!-- 右上角的智能体/参数入口 -->
+        <!-- 输入区工具行的按钮：智能体 / 模型 / 参数 -->
         <Style Selector="Button.agentButton">
             <Setter Property="Background" Value="{DynamicResource PanelBackground}" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="6" />
             <Setter Property="Padding" Value="10,5" />
-            <Setter Property="FontSize" Value="12" />
+            <!-- 13 而不是 12：图标统一用 Size12，文字再小一档就显得字缩在图标旁边 -->
+            <Setter Property="FontSize" Value="13" />
             <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+            <!-- 撑满工具行的行高：不然它会比右边的发送按钮矮一截，同一行里高高低低很难看 -->
+            <Setter Property="VerticalAlignment" Value="Stretch" />
         </Style>
         <Style Selector="Button.agentButton:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource HoverOverlay}" />
         </Style>
+
+        <!-- 思考模式等开关按钮：外观照搬 agentButton，选中态用强调色衬底 -->
+        <Style Selector="ToggleButton.agentButton">
+            <Setter Property="Background" Value="{DynamicResource PanelBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="10,5" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
+        </Style>
+        <Style Selector="ToggleButton.agentButton:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource HoverOverlay}" />
+        </Style>
+        <Style Selector="ToggleButton.agentButton:checked /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource AccentSubtle}" />
+        </Style>
+
+        <!-- 思考块的折叠条：刻意压扁，仅比正文高一点，避免占用太多气泡高度 -->
+        <Style Selector="ToggleButton.thinkingToggle">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="2,1" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="ToggleButton.thinkingToggle:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource HoverOverlay}" />
+        </Style>
+        <Style Selector="ToggleButton.thinkingToggle:checked /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
     </Window.Styles>
 
-    <Grid RowDefinitions="*,Auto">
+    <Grid RowDefinitions="*">
 
         <!-- ==================== 主体：左面板 + 右区域 ==================== -->
         <Grid Grid.Row="0" ColumnDefinitions="Auto,*">
@@ -99,20 +141,46 @@
                     BorderThickness="0,0,1,0">
                 <Grid RowDefinitions="Auto,*,Auto">
 
-                    <!-- 折叠按钮 -->
+                    <!--
+                        折叠按钮。原来用字符 "≡"（U+2261 数学等号），多数字体里渲染成
+                        三条又短又挤的线，看着窄；改用 Fluent 图标库的汉堡菜单图标，
+                        单色矢量、跟随 Foreground，跨平台一致。
+                    -->
                     <Button Grid.Row="0"
+                            Name="LeftPanelToggleButton"
                             Classes="flat"
+                            Classes.narrow="{Binding IsLeftPanelCollapsed}"
                             Command="{Binding ToggleLeftPanelCommand}"
-                            ToolTip.Tip="折叠/展开侧边栏"
+                            ToolTip.Tip="{DynamicResource Loc.Sidebar.ToggleTip}"
+                            AutomationProperties.Name="{DynamicResource Loc.Sidebar.ToggleTip}"
                             Margin="4,6">
-                        <TextBlock Text="≡" FontSize="16" />
+                        <ic:FluentIcon Icon="Navigation" IconSize="Resizable" FontSize="20" />
                     </Button>
 
                     <!-- 会话列表 -->
                     <Grid Grid.Row="1" RowDefinitions="Auto,*"
                           IsVisible="{Binding !IsLeftPanelCollapsed}">
-                        <TextBlock Grid.Row="0" Text="📝 对话历史"
-                                   Classes="sectionTitle" Margin="14,6,14,4" />
+                        <!--
+                            搜索框。输入后防抖 300ms 再查库，命中标题或任意消息正文。
+                            清除按钮只在有内容时出现——常驻一个点了没反应的 ✕ 是纯粹的噪音。
+                        -->
+                        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="10,0,10,6">
+                            <TextBox Grid.Column="0"
+                                     Text="{Binding SearchText}"
+                                     PlaceholderText="{DynamicResource Loc.Sidebar.SearchPlaceholder}"
+                                     Padding="4,2"
+                                     FontSize="13"
+                                     VerticalContentAlignment="Center" />
+                            <Button Grid.Column="1"
+                                    Classes="flat"
+                                    Padding="8,4"
+                                    ToolTip.Tip="{DynamicResource Loc.Sidebar.ClearSearch}"
+                                    AutomationProperties.Name="{DynamicResource Loc.Sidebar.ClearSearch}"
+                                    Command="{Binding ClearSearchCommand}"
+                                    IsVisible="{Binding HasSearchText}">
+                                <ic:FluentIcon Icon="Dismiss" IconSize="Resizable" FontSize="14" />
+                            </Button>
+                        </Grid>
 
                         <ListBox Grid.Row="1"
                                  Classes="sessionList"
@@ -133,12 +201,13 @@
                                         <!-- 内联二次确认：平时是 ✕，确认态变成红色"确认删除？" -->
                                         <Panel Grid.Column="1">
                                             <Button Classes="rowDelete"
-                                                    Content="✕"
-                                                    Classes.confirming="{Binding IsConfirmingDelete}"
+    Classes.confirming="{Binding IsConfirmingDelete}"
                                                     Command="{Binding RequestDeleteCommand}"
-                                                    ToolTip.Tip="删除对话" />
+                                                    ToolTip.Tip="{DynamicResource Loc.Session.DeleteTip}" >
+    <ic:FluentIcon Icon="Dismiss" IconSize="Resizable" FontSize="20" />
+</Button>
                                             <Button Classes="danger"
-                                                    Content="确认删除？"
+                                                    Content="{DynamicResource Loc.Common.ConfirmDeleteQuestion}"
                                                     IsVisible="{Binding IsConfirmingDelete}"
                                                     Command="{Binding RequestDeleteCommand}" />
                                         </Panel>
@@ -146,17 +215,40 @@
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
+
+                        <!-- 搜索无结果。列表空着不给任何反馈时，用户分不清是没搜到还是程序卡了 -->
+                        <TextBlock Grid.Row="1"
+                                   Text="{DynamicResource Loc.Sidebar.NoMatch}"
+                                   Classes="secondary"
+                                   Margin="16,12"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Top"
+                                   IsVisible="{Binding ShowNoSearchResults}" />
                     </Grid>
 
-                    <!-- 底部操作 -->
-                    <StackPanel Grid.Row="2" Margin="6,6,6,10" Spacing="2"
-                                IsVisible="{Binding !IsLeftPanelCollapsed}">
-                        <Button Classes="flat"
-                                Command="{Binding NewSessionCommand}"
-                                Content="✨ 新对话" />
-                        <Button Classes="flat"
+                    <!--
+                        底部操作。新对话已挪到输入区工具行，这里只留配置入口，
+                        且它不再随侧边栏一起隐藏——折叠后收成齿轮图标继续留在栏底，
+                        否则收起侧栏就等于把"进配置"这条路也一并堵死了。
+                    -->
+                    <StackPanel Grid.Row="2" Margin="6,6,6,10" Spacing="2">
+                        <!-- 停在配置视图时这个入口要高亮，否则看不出当前在哪一侧 -->
+                        <Button Name="ToggleConfigButton"
+                                Classes="flat"
+                                Classes.active="{Binding IsConfigView}"
+                                Classes.narrow="{Binding IsLeftPanelCollapsed}"
+                                HorizontalAlignment="Stretch"
                                 Command="{Binding ToggleConfigViewCommand}"
-                                Content="⚙ 配置" />
+                                ToolTip.Tip="{DynamicResource Loc.Config.Title}"
+                                AutomationProperties.Name="{DynamicResource Loc.Config.Title}">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <ic:FluentIcon Icon="Settings" IconSize="Resizable" FontSize="20" VerticalAlignment="Center"/>
+                                <!-- 折叠后只剩 48px，文字放不下，藏起来只留图标 -->
+                                <TextBlock Text="{DynamicResource Loc.Config.Title}"
+                                           VerticalAlignment="Center"
+                                           IsVisible="{Binding !IsLeftPanelCollapsed}" />
+                            </StackPanel>
+                        </Button>
                     </StackPanel>
                 </Grid>
             </Border>
@@ -174,103 +266,67 @@
                             BorderBrush="{DynamicResource BorderSubtle}"
                             BorderThickness="0,0,0,1">
                         <!--
-                            标题占 * 列随窗口收缩；统计与按钮同属一个 Auto 列。
+                            标题占 * 列随窗口收缩；重命名入口与统计各占一列。
                             统计文字必须限宽并允许省略——否则它的期望宽度会把这一列撑到
                             超出窗口，右边缘的按钮就被挤出可视区域，用户根本点不到。
                         -->
-                        <Grid ColumnDefinitions="*,Auto">
+                        <Grid ColumnDefinitions="*,Auto,Auto">
+                            <!--
+                                标题平时是文字，点 ✏️ 原地换成输入框。
+                                两种状态放在同一个单元格里，用 IsVisible 互斥，
+                                切换时不会把右侧的统计挤动。
+                            -->
                             <TextBlock Grid.Column="0"
-                                       Text="{Binding CurrentSession.Title, FallbackValue=新对话}"
-                                       FontSize="16" FontWeight="SemiBold"
+                                       Text="{Binding CurrentSession.Title, FallbackValue={DynamicResource Loc.Session.NewTitle}}"
+                                       FontSize="20" FontWeight="SemiBold"
                                        VerticalAlignment="Center"
                                        Margin="0,0,12,0"
-                                       TextTrimming="CharacterEllipsis" />
+                                       TextTrimming="CharacterEllipsis"
+                                       ToolTip.Tip="{DynamicResource Loc.Session.RenameHint}"
+                                       IsVisible="{Binding !IsRenamingSession}" />
 
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12"
-                                        VerticalAlignment="Center">
-                                <TextBlock Classes="secondary"
-                                           VerticalAlignment="Center"
-                                           MaxWidth="220"
-                                           TextTrimming="CharacterEllipsis"
-                                           IsVisible="{Binding CurrentSession.ShouldShowHeaderStatistics}"
-                                           Text="{Binding CurrentSession.HeaderStatistics}" />
+                            <TextBox Grid.Column="0"
+                                     Name="SessionTitleEditor"
+                                     Text="{Binding SessionTitleDraft}"
+                                     FontSize="20" FontWeight="SemiBold"
+                                     VerticalAlignment="Center"
+                                     Margin="0,0,12,0"
+                                     IsVisible="{Binding IsRenamingSession}"
+                                     KeyDown="OnSessionTitleEditorKeyDown"
+                                     LostFocus="OnSessionTitleEditorLostFocus" />
 
-                                <!-- 智能体与参数：收进右上角的按钮，点击展开 -->
-                                <Button Name="AgentButton"
-                                        Classes="agentButton"
+                            <!-- 重命名与导出：平时并排在标题右侧，进入重命名时一并让位 -->
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2"
+                                        VerticalAlignment="Center" Margin="0,0,4,0"
+                                        IsVisible="{Binding !IsRenamingSession}">
+                                <Button Classes="flat"
+                                        Name="SessionRenameButton"
+    ToolTip.Tip="{DynamicResource Loc.Session.RenameTip}"
+                                        AutomationProperties.Name="{DynamicResource Loc.Session.RenameTip}"
                                         VerticalAlignment="Center"
-                                        ToolTip.Tip="{Binding CurrentSession.ParameterSummary, FallbackValue='选择智能体与参数'}">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <TextBlock Text="{Binding CurrentSession.AgentButtonText, FallbackValue='🤖 智能体'}" />
-                                    <TextBlock Text="▾" Classes="secondary" VerticalAlignment="Center" />
-                                </StackPanel>
-
-                                <Button.Flyout>
-                                    <Flyout Placement="BottomEdgeAlignedRight">
-                                        <StackPanel Width="340" Spacing="10"
-                                                    DataContext="{Binding CurrentSession}"
-                                                    x:DataType="vm:ChatSessionViewModel">
-
-                                            <TextBlock Classes="sectionTitle" Text="智能体" />
-                                            <ComboBox ItemsSource="{Binding AvailableAgents}"
-                                                      SelectedItem="{Binding SelectedAgent}"
-                                                      HorizontalAlignment="Stretch">
-                                                <ComboBox.ItemTemplate>
-                                                    <DataTemplate x:DataType="models:Agent">
-                                                        <TextBlock Text="{Binding Name}" />
-                                                    </DataTemplate>
-                                                </ComboBox.ItemTemplate>
-                                            </ComboBox>
-                                            <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                       Text="{Binding AgentDescription}"
-                                                       IsVisible="{Binding HasAgentDescription}" />
-
-                                            <Border BorderBrush="{DynamicResource BorderSubtle}"
-                                                    BorderThickness="0,1,0,0" Margin="0,4" />
-
-                                            <TextBlock Classes="sectionTitle" Text="参数" />
-                                            <Grid ColumnDefinitions="Auto,*,38"
-                                                  RowDefinitions="Auto,Auto,Auto"
-                                                  ColumnSpacing="10" RowSpacing="8">
-                                                <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel"
-                                                           Text="Temperature" />
-                                                <Slider Grid.Row="0" Grid.Column="1"
-                                                        Minimum="0" Maximum="2" TickFrequency="0.1"
-                                                        Value="{Binding Temperature}" />
-                                                <TextBlock Grid.Row="0" Grid.Column="2" Classes="secondary"
-                                                           TextAlignment="Right" VerticalAlignment="Center"
-                                                           Text="{Binding Temperature, StringFormat='{}{0:0.##}'}" />
-
-                                                <TextBlock Grid.Row="1" Grid.Column="0" Classes="fieldLabel"
-                                                           Text="Top P" />
-                                                <Slider Grid.Row="1" Grid.Column="1"
-                                                        Minimum="0" Maximum="1" TickFrequency="0.05"
-                                                        Value="{Binding TopP}" />
-                                                <TextBlock Grid.Row="1" Grid.Column="2" Classes="secondary"
-                                                           TextAlignment="Right" VerticalAlignment="Center"
-                                                           Text="{Binding TopP, StringFormat='{}{0:0.##}'}" />
-
-                                                <TextBlock Grid.Row="2" Grid.Column="0" Classes="fieldLabel"
-                                                           Text="Max Tokens" />
-                                                <Slider Grid.Row="2" Grid.Column="1"
-                                                        Minimum="1" Maximum="4096" TickFrequency="1"
-                                                        Value="{Binding MaxTokens}" />
-                                                <TextBlock Grid.Row="2" Grid.Column="2" Classes="secondary"
-                                                           TextAlignment="Right" VerticalAlignment="Center"
-                                                           Text="{Binding MaxTokens}" />
-                                            </Grid>
-
-                                            <Button Content="↻ 重置为智能体默认"
-                                                    HorizontalAlignment="Left"
-                                                    Command="{Binding ResetParametersCommand}" />
-
-                                            <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                       Text="参数只在本次会话内生效，不会写回智能体配置；切换智能体会恢复其默认值。" />
-                                        </StackPanel>
-                                    </Flyout>
-                                </Button.Flyout>
-                                </Button>
+                                        Padding="8,4"
+                                        Command="{Binding BeginRenameSessionCommand}" >
+    <ic:FluentIcon Icon="Edit" IconSize="Resizable" FontSize="20" />
+</Button>
+                                <Button Classes="flat"
+                                        Name="SessionExportButton"
+    ToolTip.Tip="{DynamicResource Loc.Session.ExportTip}"
+                                        AutomationProperties.Name="{DynamicResource Loc.Session.ExportTip}"
+                                        VerticalAlignment="Center"
+                                        Padding="8,4"
+                                        Click="OnExportSessionClick" >
+    <ic:FluentIcon Icon="ArrowDownload" IconSize="Resizable" FontSize="20" />
+</Button>
                             </StackPanel>
+
+                            <!-- 智能体与参数的选择入口已经下移到输入区的工具行，这里只留统计 -->
+                            <TextBlock Grid.Column="2"
+                                       Classes="secondary"
+                                       VerticalAlignment="Center"
+                                       MaxWidth="220"
+                                       TextTrimming="CharacterEllipsis"
+                                       IsVisible="{Binding CurrentSession.ShouldShowHeaderStatistics}"
+                                       Text="{Binding CurrentSession.HeaderStatistics}" />
                         </Grid>
                     </Border>
 
@@ -287,10 +343,47 @@
                                             Classes.user="{Binding IsUser}"
                                             Classes.assistant="{Binding IsAssistant}">
                                         <StackPanel>
-                                            <!-- 用户消息：纯文本 -->
-                                            <TextBlock Text="{Binding Content}"
-                                                       TextWrapping="Wrap"
-                                                       IsVisible="{Binding IsUser}" />
+                                            <!-- 用户消息：纯文本。
+                                                 用 SelectableTextBlock——普通 TextBlock 不可选中，
+                                                 自己发过的内容反而没法复制。 -->
+                                            <SelectableTextBlock Text="{Binding Content}"
+                                                                 TextWrapping="Wrap"
+                                                                 IsVisible="{Binding IsUser}" />
+
+                                            <!-- 思考模式：推理内容，可折叠。仅当模型确实返回推理内容时才显示。
+                                                 用 Border 包出独立底色，与回答明显区分；左侧留出缩进让思考块整体右移一点，
+                                                 与回答错开层次。内部 StackPanel 让 MarkdownRenderer
+                                                 正常参与布局测量，避免它被压进 Grid 行里而与回答重叠。 -->
+                                            <Border IsVisible="{Binding HasThinking}"
+                                                    Margin="0,5,0,5"
+                                                    Background="{DynamicResource SecondaryCardBackgroundColor}"
+                                                    CornerRadius="6"
+                                                    Padding="8,6">
+                                                <StackPanel Spacing="2">
+                                                    <ToggleButton Classes="thinkingToggle"
+                                                                  IsChecked="{Binding IsThinkingExpanded}">
+                                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                                            <ic:FluentIcon Icon="Lightbulb"
+                                                                           IconSize="Resizable" FontSize="13"
+                                                                           VerticalAlignment="Center" />
+                                                            <TextBlock Text="{Binding ThinkingStateLabel}"
+                                                                       FontSize="13"
+                                                                       VerticalAlignment="Center" />
+                                                            <ic:FluentIcon Icon="ChevronDown"
+                                                                           IconSize="Resizable" FontSize="13"
+                                                                           VerticalAlignment="Center"
+                                                                           IsVisible="{Binding IsThinkingExpanded}" />
+                                                            <ic:FluentIcon Icon="ChevronRight"
+                                                                           IconSize="Resizable" FontSize="13"
+                                                                           VerticalAlignment="Center"
+                                                                           IsVisible="{Binding !IsThinkingExpanded}" />
+                                                        </StackPanel>
+                                                    </ToggleButton>
+
+                                                    <lm:MarkdownRenderer MarkdownBuilder="{Binding ThinkingBuilder}"
+                                                                     IsVisible="{Binding IsThinkingExpanded}" Margin="5,2,2,2" />
+                                                </StackPanel>
+                                            </Border>
 
                                             <!-- 助手消息：Markdown 流式渲染 -->
                                             <lm:MarkdownRenderer MarkdownBuilder="{Binding MarkdownBuilder}"
@@ -313,10 +406,26 @@
                                             Classes.denied="{Binding IsDenied}">
                                         <StackPanel Spacing="5">
                                             <Grid ColumnDefinitions="*,Auto">
-                                                <TextBlock Grid.Column="0"
-                                                           Text="{Binding Summary}"
-                                                           FontWeight="SemiBold"
-                                                           TextWrapping="Wrap" />
+                                                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6">
+                                                    <!-- 状态用图标表达：被策略拒绝与用户拒绝要能一眼分开 -->
+                                                    <ic:FluentIcon Icon="CheckmarkCircle" IconSize="Resizable" FontSize="20"
+                                                                   IsVisible="{Binding IsSucceeded}"
+                                                                   VerticalAlignment="Center"/>
+                                                    <ic:FluentIcon Icon="Prohibited" IconSize="Resizable" FontSize="20"
+                                                                   Foreground="{DynamicResource DangerBrush}"
+                                                                   IsVisible="{Binding IsDenied}"
+                                                                   VerticalAlignment="Center"/>
+                                                    <ic:FluentIcon Icon="DismissCircle" IconSize="Resizable" FontSize="20"
+                                                                   IsVisible="{Binding IsDeclined}"
+                                                                   VerticalAlignment="Center"/>
+                                                    <ic:FluentIcon Icon="ErrorCircle" IconSize="Resizable" FontSize="20"
+                                                                   Foreground="{DynamicResource DangerBrush}"
+                                                                   IsVisible="{Binding IsFailed}"
+                                                                   VerticalAlignment="Center"/>
+                                                    <TextBlock Text="{Binding Summary}"
+                                                               FontWeight="SemiBold"
+                                                               TextWrapping="Wrap" />
+                                                </StackPanel>
                                                 <TextBlock Grid.Column="1"
                                                            Classes="secondary"
                                                            VerticalAlignment="Top"
@@ -336,9 +445,63 @@
                                                     <SelectableTextBlock Text="{Binding ResultText}"
                                                                          TextWrapping="Wrap"
                                                                          FontFamily="Cascadia Mono,Consolas,monospace"
-                                                                         FontSize="12" />
+                                                                         FontSize="20" />
                                                 </ScrollViewer>
                                             </Border>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+
+                                <!--
+                                    危险工具的逐次确认卡片。
+                                    生成会停在这里等用户点按钮，因此必须把参数完整显示出来——
+                                    让人在没看清要执行什么的情况下做决定，等于没有确认。
+                                -->
+                                <DataTemplate DataType="vm:ToolConfirmationViewModel">
+                                    <Border Classes="toolCall" Classes.dangerous="True">
+                                        <StackPanel Spacing="6">
+                                            <TextBlock Text="{Binding Headline}"
+                                                       FontWeight="SemiBold"
+                                                       TextWrapping="Wrap" />
+
+                                            <TextBlock Classes="secondary" Text="{Binding SourceLabel}" />
+
+                                            <SelectableTextBlock Text="{Binding ArgumentsText}"
+                                                                 TextWrapping="Wrap"
+                                                                 FontFamily="Cascadia Mono,Consolas,monospace"
+                                                                 FontSize="20" />
+
+                                            <TextBlock Classes="secondary"
+                                                       TextWrapping="Wrap"
+                                                       Text="{Binding Description}"
+                                                       IsVisible="{Binding HasDescription}" />
+
+                                            <!-- 决定后收起按钮，只留一行结果 -->
+                                            <StackPanel Orientation="Horizontal" Spacing="8"
+                                                        IsVisible="{Binding !IsResolved}">
+                                                <Button Classes="danger"
+    Command="{Binding AllowCommand}" >
+    <StackPanel Orientation="Horizontal" Spacing="6">
+        <ic:FluentIcon Icon="Checkmark" IconSize="Resizable" FontSize="20" VerticalAlignment="Center"/>
+        <TextBlock Text="{DynamicResource Loc.Confirm.Allow}" VerticalAlignment="Center"/>
+    </StackPanel>
+</Button>
+                                                <Button
+    Command="{Binding RejectCommand}" >
+    <StackPanel Orientation="Horizontal" Spacing="6">
+        <ic:FluentIcon Icon="Prohibited" IconSize="Resizable" FontSize="20" VerticalAlignment="Center"/>
+        <TextBlock Text="{DynamicResource Loc.Confirm.Reject}" VerticalAlignment="Center"/>
+    </StackPanel>
+</Button>
+                                            </StackPanel>
+
+                                            <CheckBox Content="{DynamicResource Loc.Confirm.SkipSession}"
+                                                      IsChecked="{Binding TrustForThisSession}"
+                                                      IsVisible="{Binding !IsResolved}" />
+
+                                            <TextBlock Text="{Binding ResolutionText}"
+                                                       IsVisible="{Binding IsResolved}"
+                                                       TextWrapping="Wrap" />
                                         </StackPanel>
                                     </Border>
                                 </DataTemplate>
@@ -354,27 +517,224 @@
                             BorderThickness="0,1,0,0">
                         <StackPanel Spacing="8">
 
-                            <!-- 输入框与发送/停止 -->
-                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                <TextBox Grid.Column="0"
-                                         Name="InputBox"
-                                         AcceptsReturn="True"
-                                         TextWrapping="Wrap"
-                                         MinHeight="64" MaxHeight="180"
-                                         PlaceholderText="输入消息，Enter 发送，Shift+Enter 换行"
-                                         Text="{Binding CurrentSession.InputText}" />
+                            <TextBox Name="InputBox"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     MinHeight="64" MaxHeight="180"
+                                     PlaceholderText="{DynamicResource Loc.Chat.InputPlaceholder}"
+                                     Text="{Binding CurrentSession.InputText}" />
 
-                                <Panel Grid.Column="1" VerticalAlignment="Bottom">
+                            <!--
+                                工具行：智能体、模型、参数在左，发送/停止在右。
+                                中间那列是 *，负责吸收剩余宽度，把右侧按钮顶到最右——
+                                少了它，空间不足时两侧会被一起压缩。
+                            -->
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+
+                                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6">
+
+                                    <!-- 新对话：开新会话是最高频的动作，跟发消息放在一起最顺手，
+                                         放在最左也不至于把"当前用的是什么"那几个按钮挤到中间去 -->
+                                    <Button Name="NewSessionButton"
+                                            Classes="agentButton"
+                                            Command="{Binding NewSessionCommand}"
+                                            ToolTip.Tip="{DynamicResource Loc.Chat.NewChatTip}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <ic:FluentIcon Icon="Add" IconSize="Resizable" FontSize="20" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{DynamicResource Loc.Chat.NewChat}"
+                                                       VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+
+                                    <!-- 智能体 -->
+                                    <Button Name="AgentButton"
+                                            Classes="agentButton"
+                                            MaxWidth="170"
+                                            ToolTip.Tip="{DynamicResource Loc.Chat.SelectAgentTip}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <ic:FluentIcon Icon="Bot" IconSize="Resizable" FontSize="20" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{Binding CurrentSession.AgentButtonText, FallbackValue={DynamicResource Loc.Chat.AgentButton}}"
+                                                       MaxWidth="130"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center" />
+                                        </StackPanel>
+
+                                        <Button.Flyout>
+                                            <Flyout Placement="TopEdgeAlignedLeft">
+                                                <StackPanel Width="320" Spacing="10"
+                                                            DataContext="{Binding CurrentSession}"
+                                                            x:DataType="vm:ChatSessionViewModel">
+
+                                                    <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Chat.Agent}" />
+
+                                                    <!--
+                                                        直接把列表摊开，而不是塞一个下拉框：
+                                                        面板本身就是点开的，再套一层 ComboBox
+                                                        等于让用户为选一个智能体点两次。
+                                                    -->
+                                                    <ListBox ItemsSource="{Binding AvailableAgents}"
+                                                             SelectedItem="{Binding SelectedAgent}"
+                                                             MaxHeight="260">
+                                                        <ListBox.ItemTemplate>
+                                                            <DataTemplate x:DataType="models:Agent">
+                                                                <TextBlock Text="{Binding Name}" />
+                                                            </DataTemplate>
+                                                        </ListBox.ItemTemplate>
+                                                    </ListBox>
+                                                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                               Text="{Binding AgentDescription}"
+                                                               IsVisible="{Binding HasAgentDescription}" />
+                                                </StackPanel>
+                                            </Flyout>
+                                        </Button.Flyout>
+                                    </Button>
+
+                                    <!-- 模型 -->
+                                    <Button Name="ModelButton"
+                                            Classes="agentButton"
+                                            MaxWidth="190"
+                                            ToolTip.Tip="{DynamicResource Loc.Chat.SelectModelTip}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <ic:FluentIcon Icon="Brain" IconSize="Resizable" FontSize="20" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{Binding CurrentSession.ModelButtonText, FallbackValue={DynamicResource Loc.Chat.ModelButton}}"
+                                                      
+                                                       TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center" />
+                                        </StackPanel>
+
+                                        <Button.Flyout>
+                                            <Flyout Placement="TopEdgeAlignedLeft">
+                                                <StackPanel Width="300" Spacing="10"
+                                                            DataContext="{Binding CurrentSession}"
+                                                            x:DataType="vm:ChatSessionViewModel">
+
+                                                    <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Chat.Model}" />
+
+                                                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                               Text="{Binding ModelFollowDefaultHint}"
+                                                               IsVisible="{Binding !HasModelOverride}" />
+
+                                                    <ListBox ItemsSource="{Binding AvailableModels}"
+                                                             SelectedItem="{Binding ModelOverride}"
+                                                             MaxHeight="260" />
+
+                                                    <Button
+    HorizontalAlignment="Left"
+                                                            IsEnabled="{Binding HasModelOverride}"
+                                                            Command="{Binding ResetModelCommand}" >
+    <StackPanel Orientation="Horizontal" Spacing="6">
+        <ic:FluentIcon Icon="ArrowReset" IconSize="Resizable" FontSize="20" VerticalAlignment="Center"/>
+        <TextBlock Text="{DynamicResource Loc.Chat.FollowDefault}" VerticalAlignment="Center"/>
+    </StackPanel>
+</Button>
+
+                                                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                               Text="{DynamicResource Loc.Chat.ModelOverrideHint}" />
+                                                </StackPanel>
+                                            </Flyout>
+                                        </Button.Flyout>
+                                    </Button>
+
+                                    <!-- 思考模式开关：开启后让支持的模型先推理再回答，并在消息里展示推理过程 -->
+                                    <ToggleButton Classes="agentButton"
+                                                  IsChecked="{Binding Preferences.ThinkingEnabled}"
+                                                  ToolTip.Tip="{DynamicResource Loc.Chat.ThinkingToggleTip}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <ic:FluentIcon Icon="Lightbulb" IconSize="Resizable" FontSize="20" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{DynamicResource Loc.Chat.Thinking}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </ToggleButton>
+
+                                    <!-- 采样参数 -->
+                                    <Button Name="ParametersButton"
+                                            Classes="agentButton"
+                                            ToolTip.Tip="{Binding CurrentSession.ParameterSummary, FallbackValue={DynamicResource Loc.Chat.ParametersFallback}}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <ic:FluentIcon Icon="Options" IconSize="Resizable" FontSize="20" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{DynamicResource Loc.Chat.ParametersButton}"
+                                                       VerticalAlignment="Center" />
+                                        </StackPanel>
+
+                                        <Button.Flyout>
+                                            <Flyout Placement="TopEdgeAlignedLeft">
+                                                <StackPanel Width="340" Spacing="10"
+                                                            DataContext="{Binding CurrentSession}"
+                                                            x:DataType="vm:ChatSessionViewModel">
+
+                                                    <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Chat.ParametersTitle}" />
+                                                    <Grid ColumnDefinitions="Auto,*,38"
+                                                          RowDefinitions="Auto,Auto,Auto"
+                                                          ColumnSpacing="10" RowSpacing="8">
+                                                        <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel"
+                                                                   Text="Temperature" />
+                                                        <Slider Grid.Row="0" Grid.Column="1"
+                                                                Minimum="0" Maximum="2" TickFrequency="0.1"
+                                                                Value="{Binding Temperature}" />
+                                                        <TextBlock Grid.Row="0" Grid.Column="2" Classes="secondary"
+                                                                   TextAlignment="Right" VerticalAlignment="Center"
+                                                                   Text="{Binding Temperature, StringFormat='{}{0:0.##}'}" />
+
+                                                        <TextBlock Grid.Row="1" Grid.Column="0" Classes="fieldLabel"
+                                                                   Text="Top P" />
+                                                        <Slider Grid.Row="1" Grid.Column="1"
+                                                                Minimum="0" Maximum="1" TickFrequency="0.05"
+                                                                Value="{Binding TopP}" />
+                                                        <TextBlock Grid.Row="1" Grid.Column="2" Classes="secondary"
+                                                                   TextAlignment="Right" VerticalAlignment="Center"
+                                                                   Text="{Binding TopP, StringFormat='{}{0:0.##}'}" />
+
+                                                        <TextBlock Grid.Row="2" Grid.Column="0" Classes="fieldLabel"
+                                                                   Text="Max Tokens" />
+                                                        <Slider Grid.Row="2" Grid.Column="1"
+                                                                Minimum="1" Maximum="4096" TickFrequency="1"
+                                                                Value="{Binding MaxTokens}" />
+                                                        <TextBlock Grid.Row="2" Grid.Column="2" Classes="secondary"
+                                                                   TextAlignment="Right" VerticalAlignment="Center"
+                                                                   Text="{Binding MaxTokens}" />
+                                                    </Grid>
+
+                                                    <Button
+    HorizontalAlignment="Left"
+                                                            Command="{Binding ResetParametersCommand}" >
+    <StackPanel Orientation="Horizontal" Spacing="6">
+        <ic:FluentIcon Icon="ArrowReset" IconSize="Resizable" FontSize="20" VerticalAlignment="Center"/>
+        <TextBlock Text="{DynamicResource Loc.Chat.ResetParameters}" VerticalAlignment="Center"/>
+    </StackPanel>
+</Button>
+
+                                                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                               Text="{DynamicResource Loc.Chat.ParametersHint}" />
+                                                </StackPanel>
+                                            </Flyout>
+                                        </Button.Flyout>
+                                    </Button>
+                                </StackPanel>
+
+                                <!-- 占位：吸收剩余宽度，保证发送按钮贴右 -->
+                                <Panel Grid.Column="1" />
+
+                                <Panel Grid.Column="2">
                                     <Button Classes="primary"
-                                            Content="发送"
+                                            Name="SendButton"
                                             MinWidth="72"
+                                            VerticalAlignment="Stretch"
                                             Command="{Binding CurrentSession.SendCommand}"
-                                            IsVisible="{Binding !CurrentSession.IsGenerating}" />
+                                            IsVisible="{Binding !CurrentSession.IsGenerating}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <ic:FluentIcon Icon="Send" IconSize="Resizable" FontSize="16" VerticalAlignment="Center" />
+                                            <TextBlock Text="{DynamicResource Loc.Chat.Send}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
                                     <Button Classes="primary"
-                                            Content="停止"
                                             MinWidth="72"
+                                            VerticalAlignment="Stretch"
                                             Command="{Binding CurrentSession.StopCommand}"
-                                            IsVisible="{Binding CurrentSession.IsGenerating}" />
+                                            IsVisible="{Binding CurrentSession.IsGenerating}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <ic:FluentIcon Icon="Stop" IconSize="Resizable" FontSize="16" VerticalAlignment="Center" />
+                                            <TextBlock Text="{DynamicResource Loc.Chat.Stop}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
                                 </Panel>
                             </Grid>
                         </StackPanel>
@@ -389,48 +749,71 @@
                             BorderBrush="{DynamicResource BorderSubtle}"
                             BorderThickness="0,0,0,1">
                         <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="⚙ 配置" FontSize="16" FontWeight="SemiBold"
+                            <TextBlock Text="{DynamicResource Loc.Config.Title}" FontSize="20" FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
-                            <Button Grid.Column="1" Classes="flat" Content="✕ 返回对话"
-                                    Command="{Binding CloseConfigViewCommand}" />
+                            <Button Grid.Column="1" Classes="flat"
+                                    Command="{Binding CloseConfigViewCommand}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <ic:FluentIcon Icon="ArrowLeft" IconSize="Resizable" FontSize="16" VerticalAlignment="Center" />
+                                    <TextBlock Text="{DynamicResource Loc.Config.Back}" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
                         </Grid>
                     </Border>
 
                     <TabControl Grid.Row="1" Margin="12">
-                        <TabItem Header="API 配置">
+                        <TabItem Header="{DynamicResource Loc.Config.TabApi}">
                             <ScrollViewer>
                                 <StackPanel Margin="8" Spacing="10" MaxWidth="760"
                                             HorizontalAlignment="Left">
 
-                                    <StackPanel Spacing="4">
-                                        <TextBlock Classes="sectionTitle" Text="选择供应商" />
-                                        <ComboBox ItemsSource="{Binding ProviderConfig.AvailablePresets}"
-                                                  SelectedItem="{Binding ProviderConfig.SelectedPreset}"
-                                                  MinWidth="240">
-                                            <ComboBox.ItemTemplate>
-                                                <DataTemplate x:DataType="models:ProviderPreset">
-                                                    <TextBlock Text="{Binding DisplayName}" />
-                                                </DataTemplate>
-                                            </ComboBox.ItemTemplate>
-                                        </ComboBox>
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Provider.Select}" />
+
+                                        <!-- 供应商以按钮组呈现：点击芯片即切换并填充下方表单（芯片命令驱动 SelectedChoice）。
+                                             普通供应商芯片、末尾的「+ 新建」与「删除」哨兵混在同一个换行流里——
+                                             一行放得下就紧跟其后，放不下整体换到下一行，不出现滚动条。
+                                             用 ItemsControl 而非 ListBox：本组无需 ListBox 选中态，
+                                             哨兵项也不必特意设为不可选中。「删除」仅当选中自定义供应商时可见。 -->
+                                        <ItemsControl Classes="providerTabs"
+                                                       ItemsSource="{Binding ProviderConfig.SelectorItems}"
+                                                       ItemTemplate="{StaticResource ProviderSelectorTemplate}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel Orientation="Horizontal" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                        </ItemsControl>
+                                    </StackPanel>
+
+                                    <!-- 名称：只有自定义供应商需要，内置预设显示预设名就够了 -->
+                                    <StackPanel Spacing="4"
+                                                IsVisible="{Binding ProviderConfig.IsCustomProvider}">
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Common.Name}" />
+                                        <TextBox Text="{Binding ProviderConfig.ProviderName}"
+                                                 MinWidth="240"
+                                                 HorizontalAlignment="Left"
+                                                 PlaceholderText="{DynamicResource Loc.Provider.NamePlaceholder}" />
                                     </StackPanel>
 
                                     <StackPanel Spacing="4"
                                                 IsVisible="{Binding ProviderConfig.RequiresApiKey}">
                                         <TextBlock Classes="sectionTitle" Text="API Key" />
+                                        <!--
+                                            明文与掩码必须是同一个控件。早先的做法是把一个 TextBlock
+                                            叠在打码的 TextBox 上"显示"明文：两层文字会同时绘制出来，
+                                            而且此时在框里输入，看到的仍是两层重叠的字。
+                                            改用 TextBox 自带的 RevealPassword——切换只影响掩码，
+                                            编辑与显示始终是同一个文本层。
+                                        -->
                                         <Grid ColumnDefinitions="*,Auto">
                                             <TextBox Grid.Column="0"
                                                      PasswordChar="●"
+                                                     RevealPassword="{Binding ProviderConfig.IsApiKeyVisible}"
                                                      Text="{Binding ProviderConfig.ApiKey}"
                                                      PlaceholderText="sk-..." />
-                                            <TextBlock Grid.Column="0"
-                                                       VerticalAlignment="Center"
-                                                       Margin="8,0"
-                                                       IsVisible="{Binding ProviderConfig.IsApiKeyVisible}"
-                                                       Text="{Binding ProviderConfig.ApiKey}"
-                                                       TextTrimming="CharacterEllipsis" />
                                             <ToggleButton Grid.Column="1" Margin="6,0,0,0"
-                                                          Content="显示"
+                                                          Content="{DynamicResource Loc.Common.Show}"
                                                           IsChecked="{Binding ProviderConfig.IsApiKeyVisible}" />
                                         </Grid>
                                     </StackPanel>
@@ -443,43 +826,59 @@
 
                                     <StackPanel Spacing="4"
                                                 IsVisible="{Binding ProviderConfig.IsAzure}">
-                                        <TextBlock Classes="sectionTitle" Text="部署名（Deployment）" />
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Provider.Deployment}" />
                                         <TextBox Text="{Binding ProviderConfig.DeploymentName}"
                                                  PlaceholderText="gpt-4o" />
                                     </StackPanel>
 
                                     <StackPanel Spacing="4">
-                                        <TextBlock Classes="sectionTitle" Text="模型列表" />
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Provider.Models}" />
                                         <ListBox ItemsSource="{Binding ProviderConfig.Models}"
                                                  SelectedItem="{Binding ProviderConfig.SelectedModel}"
                                                  MaxHeight="140" />
                                         <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
                                             <TextBox Grid.Column="0"
                                                      Text="{Binding ProviderConfig.NewModelName}"
-                                                     PlaceholderText="手动添加模型名" />
-                                            <Button Grid.Column="1" Content="+ 添加"
-                                                    Command="{Binding ProviderConfig.AddModelCommand}" />
-                                            <Button Grid.Column="2" Content="✕ 移除"
-                                                    Command="{Binding ProviderConfig.RemoveModelCommand}" />
+                                                     PlaceholderText="{DynamicResource Loc.Provider.AddModelPlaceholder}" />
+                                            <Button Grid.Column="1" Command="{Binding ProviderConfig.AddModelCommand}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <ic:FluentIcon Icon="Add" IconSize="Resizable" FontSize="15" VerticalAlignment="Center" />
+                                                    <TextBlock Text="{DynamicResource Loc.Common.Add}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Grid.Column="2" Command="{Binding ProviderConfig.RemoveModelCommand}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <ic:FluentIcon Icon="Delete" IconSize="Resizable" FontSize="15" VerticalAlignment="Center" />
+                                                    <TextBlock Text="{DynamicResource Loc.Common.Remove}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
                                         </Grid>
-                                        <Button Content="🔄 获取模型列表"
-                                                HorizontalAlignment="Left"
+                                        <Button HorizontalAlignment="Left"
                                                 IsEnabled="{Binding ProviderConfig.CanFetchModels}"
-                                                Command="{Binding ProviderConfig.FetchModelsCommand}" />
+                                                Command="{Binding ProviderConfig.FetchModelsCommand}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <helpers:SpinningIcon Icon="SpinnerIos"
+                                                               IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                               IsVisible="{Binding ProviderConfig.IsBusy}" />
+                                                <ic:FluentIcon Icon="ArrowDownload" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                               IsVisible="{Binding !ProviderConfig.IsBusy}" />
+                                                <TextBlock Text="{DynamicResource Loc.Provider.FetchModels}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
                                         <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                   Text="该供应商使用部署名寻址，不支持自动获取模型列表，请手动添加。"
+                                                   Text="{DynamicResource Loc.Provider.NoFetchHint}"
                                                    IsVisible="{Binding !ProviderConfig.SupportsModelFetch}" />
                                     </StackPanel>
 
                                     <StackPanel Spacing="4">
-                                        <TextBlock Classes="sectionTitle" Text="默认模型" />
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Provider.DefaultModel}" />
                                         <ComboBox ItemsSource="{Binding ProviderConfig.Models}"
                                                   SelectedItem="{Binding ProviderConfig.DefaultModel}"
                                                   MinWidth="240" />
                                     </StackPanel>
 
                                     <StackPanel Spacing="4">
-                                        <TextBlock Classes="sectionTitle" Text="默认参数" />
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Provider.DefaultParameters}" />
                                         <Grid ColumnDefinitions="Auto,*,Auto,*"
                                               ColumnSpacing="10" RowSpacing="6"
                                               RowDefinitions="Auto,Auto,Auto">
@@ -500,13 +899,13 @@
                                     </StackPanel>
 
                                     <StackPanel Spacing="4">
-                                        <TextBlock Classes="sectionTitle" Text="模型定价（每 1K tokens）" />
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Provider.Pricing}" />
                                         <TextBlock Classes="secondary"
-                                                   Text="价格以当前所选货币计。内置参考价可能滞后于官方调整，可自行覆盖。" />
+                                                   Text="{DynamicResource Loc.Provider.PricingHint}" />
                                         <ComboBox ItemsSource="{Binding ProviderConfig.PricingPresets}"
                                                   SelectedItem="{Binding ProviderConfig.SelectedPricingPreset}"
                                                   MinWidth="240"
-                                                  PlaceholderText="选择常用模型自动填入">
+                                                  PlaceholderText="{DynamicResource Loc.Provider.PricingPlaceholder}">
                                             <ComboBox.ItemTemplate>
                                                 <DataTemplate x:DataType="models:ModelPricingEntry">
                                                     <TextBlock Text="{Binding Model}" />
@@ -514,43 +913,71 @@
                                             </ComboBox.ItemTemplate>
                                         </ComboBox>
                                         <Grid ColumnDefinitions="Auto,120,Auto,120" ColumnSpacing="8">
-                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="输入" />
+                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="{DynamicResource Loc.Common.Input}" />
                                             <NumericUpDown Grid.Column="1"
                                                            Increment="0.0001" FormatString="0.0000"
                                                            Value="{Binding ProviderConfig.InputPricePer1K}" />
-                                            <TextBlock Grid.Column="2" Classes="fieldLabel" Text="输出" />
+                                            <TextBlock Grid.Column="2" Classes="fieldLabel" Text="{DynamicResource Loc.Common.Output}" />
                                             <NumericUpDown Grid.Column="3"
                                                            Increment="0.0001" FormatString="0.0000"
                                                            Value="{Binding ProviderConfig.OutputPricePer1K}" />
                                         </Grid>
                                     </StackPanel>
 
-                                    <CheckBox Content="设为默认供应商"
+                                    <CheckBox Content="{DynamicResource Loc.Provider.SetDefault}"
                                               IsChecked="{Binding ProviderConfig.IsDefault}" />
 
                                     <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <Button Classes="primary" Content="保存配置"
-                                                Command="{Binding ProviderConfig.SaveCommand}" />
-                                        <Button Content="测试连接"
-                                                IsEnabled="{Binding !ProviderConfig.IsBusy}"
-                                                Command="{Binding ProviderConfig.TestConnectionCommand}" />
+                                        <Button Classes="primary" Command="{Binding ProviderConfig.SaveCommand}"
+                                                IsEnabled="{Binding !ProviderConfig.IsBusy}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <helpers:SpinningIcon Icon="SpinnerIos"
+                                                               IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                               IsVisible="{Binding ProviderConfig.IsBusy}" />
+                                                <ic:FluentIcon Icon="Save" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                               IsVisible="{Binding !ProviderConfig.IsBusy}" />
+                                                <TextBlock Text="{DynamicResource Loc.Provider.Save}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Command="{Binding ProviderConfig.TestConnectionCommand}"
+                                                IsEnabled="{Binding !ProviderConfig.IsBusy}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <helpers:SpinningIcon Icon="SpinnerIos"
+                                                               IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                               IsVisible="{Binding ProviderConfig.IsBusy}" />
+                                                <ic:FluentIcon Icon="PlugConnected" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                               IsVisible="{Binding !ProviderConfig.IsBusy}" />
+                                                <TextBlock Text="{DynamicResource Loc.Common.TestConnection}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
                                     </StackPanel>
 
-                                    <TextBlock Classes="status" Classes.error="{Binding ProviderConfig.IsStatusError}" Text="{Binding ProviderConfig.StatusMessage}"
-                                               TextWrapping="Wrap" />
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ic:FluentIcon Icon="ErrorCircle" IconSize="Resizable" FontSize="20"
+                                       Foreground="{DynamicResource DangerBrush}"
+                                       IsVisible="{Binding ProviderConfig.IsStatusError}"
+                                       VerticalAlignment="Center"/>
+                        <TextBlock Classes="status" Classes.error="{Binding ProviderConfig.IsStatusError}"
+                                               TextWrapping="Wrap"
+                                   Text="{Binding ProviderConfig.StatusMessage}"/>
+                    </StackPanel>
                                 </StackPanel>
                             </ScrollViewer>
                         </TabItem>
 
-                        <TabItem Header="智能体管理">
+                        <TabItem Header="{DynamicResource Loc.Config.TabAgents}">
                             <Grid ColumnDefinitions="260,*" Margin="8">
 
                                 <StackPanel Grid.Column="0" Spacing="8">
                                     <Grid ColumnDefinitions="*,Auto">
-                                        <TextBlock Classes="sectionTitle" Text="📋 我的智能体"
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Agent.List}"
                                                    VerticalAlignment="Center" />
-                                        <Button Grid.Column="1" Content="+ 新建"
-                                                Command="{Binding AgentConfig.NewAgentCommand}" />
+                                        <Button Grid.Column="1" Command="{Binding AgentConfig.NewAgentCommand}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <ic:FluentIcon Icon="Add" IconSize="Resizable" FontSize="15" VerticalAlignment="Center" />
+                                                <TextBlock Text="{DynamicResource Loc.Common.Create}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
                                     </Grid>
 
                                     <ListBox ItemsSource="{Binding AgentConfig.Agents}"
@@ -559,9 +986,15 @@
                                             <DataTemplate x:DataType="vm:AgentListItemViewModel">
                                                 <Grid ColumnDefinitions="*,Auto">
                                                     <StackPanel Grid.Column="0" Spacing="2">
-                                                        <TextBlock Text="{Binding DisplayName}"
-                                                                   FontWeight="SemiBold"
-                                                                   TextTrimming="CharacterEllipsis" />
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <ic:FluentIcon Icon="Star" IconVariant="Filled" IconSize="Resizable" FontSize="20"
+                                                                           Foreground="{DynamicResource AccentBrush}"
+                                                                           IsVisible="{Binding IsDefault}"
+                                                                           VerticalAlignment="Center" />
+                                                            <TextBlock Text="{Binding DisplayName}"
+                                                                       FontWeight="SemiBold"
+                                                                       TextTrimming="CharacterEllipsis" />
+                                                        </StackPanel>
                                                         <TextBlock Text="{Binding Description}"
                                                                    Classes="secondary"
                                                                    TextTrimming="CharacterEllipsis" />
@@ -569,12 +1002,14 @@
                                                     <!-- 内置智能体不可删除，整组按钮不出现——
                                                          给一个点了没反应的按钮比不给更糟 -->
                                                     <Panel Grid.Column="1" IsVisible="{Binding CanDelete}">
-                                                        <Button Classes="rowDelete" Content="✕"
-                                                                Classes.confirming="{Binding IsConfirmingDelete}"
-                                                                ToolTip.Tip="删除该智能体"
-                                                                AutomationProperties.Name="删除该智能体"
-                                                                Command="{Binding RequestDeleteCommand}" />
-                                                        <Button Classes="danger" Content="确认删除？"
+                                                        <Button Classes="rowDelete"
+    Classes.confirming="{Binding IsConfirmingDelete}"
+                                                                ToolTip.Tip="{DynamicResource Loc.Agent.DeleteTip}"
+                                                                AutomationProperties.Name="{DynamicResource Loc.Agent.DeleteTip}"
+                                                                Command="{Binding RequestDeleteCommand}" >
+    <ic:FluentIcon Icon="Dismiss" IconSize="Resizable" FontSize="20" />
+</Button>
+                                                        <Button Classes="danger" Content="{DynamicResource Loc.Common.ConfirmDeleteQuestion}"
                                                                 IsVisible="{Binding IsConfirmingDelete}"
                                                                 Command="{Binding RequestDeleteCommand}" />
                                                     </Panel>
@@ -590,31 +1025,31 @@
                                                 IsVisible="{Binding AgentConfig.HasSelection}">
 
                                         <StackPanel Spacing="4">
-                                            <TextBlock Classes="sectionTitle" Text="名称" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Common.Name}" />
                                             <TextBox Text="{Binding AgentConfig.Name}" />
                                         </StackPanel>
 
                                         <StackPanel Spacing="4">
-                                            <TextBlock Classes="sectionTitle" Text="描述" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Common.Description}" />
                                             <TextBox Text="{Binding AgentConfig.Description}" />
                                         </StackPanel>
 
                                         <StackPanel Spacing="4">
-                                            <TextBlock Classes="sectionTitle" Text="系统提示词" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Agent.SystemPrompt}" />
                                             <TextBox Text="{Binding AgentConfig.SystemPrompt}"
                                                      AcceptsReturn="True"
                                                      TextWrapping="Wrap"
                                                      Height="180" />
                                         </StackPanel>
 
-                                        <CheckBox Content="跟随供应商默认参数"
+                                        <CheckBox Content="{DynamicResource Loc.Agent.FollowProviderParameters}"
                                                   IsChecked="{Binding AgentConfig.FollowProviderDefaults}" />
 
                                         <StackPanel Spacing="4"
                                                     IsVisible="{Binding !AgentConfig.FollowProviderDefaults}">
-                                            <TextBlock Classes="sectionTitle" Text="指定模型" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Agent.Model}" />
                                             <TextBox Text="{Binding AgentConfig.Model}"
-                                                     PlaceholderText="留空则使用供应商默认模型" />
+                                                     PlaceholderText="{DynamicResource Loc.Agent.ModelPlaceholder}" />
 
                                             <Grid ColumnDefinitions="Auto,*,Auto,*"
                                                   ColumnSpacing="10" RowDefinitions="Auto,Auto">
@@ -636,17 +1071,16 @@
 
                                         <Border Classes="card" Padding="12,10">
                                             <StackPanel Spacing="6">
-                                                <TextBlock Classes="sectionTitle" Text="技能" />
+                                                <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Config.TabSkills}" />
                                                 <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                           Text="勾选后该智能体可使用这些工具。带 ⚠️ 的技能需要另外开启下方授权。" />
+                                                           Text="{DynamicResource Loc.Agent.SkillsHint}" />
                                                 <ItemsControl ItemsSource="{Binding AgentConfig.AvailableSkills}">
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate DataType="vm:SelectableLinkViewModel">
                                                             <CheckBox IsChecked="{Binding IsSelected}">
                                                                 <StackPanel Orientation="Horizontal" Spacing="6">
                                                                     <TextBlock Text="{Binding Name}" />
-                                                                    <TextBlock Text="⚠️" Foreground="{DynamicResource DangerBrush}"
-                                                                               IsVisible="{Binding IsDangerous}" />
+                                                                    <ic:FluentIcon Icon="Warning" IconSize="Resizable" FontSize="20" Foreground="{DynamicResource DangerBrush}" IsVisible="{Binding IsDangerous}"/>
                                                                     <TextBlock Classes="secondary" Text="{Binding Detail}" />
                                                                 </StackPanel>
                                                             </CheckBox>
@@ -654,16 +1088,16 @@
                                                     </ItemsControl.ItemTemplate>
                                                 </ItemsControl>
                                                 <TextBlock Classes="secondary"
-                                                           Text="尚未配置任何技能，请到「技能」标签页添加。"
+                                                           Text="{DynamicResource Loc.Agent.NoSkills}"
                                                            IsVisible="{Binding !AgentConfig.HasAvailableSkills}" />
                                             </StackPanel>
                                         </Border>
 
                                         <Border Classes="card" Padding="12,10">
                                             <StackPanel Spacing="6">
-                                                <TextBlock Classes="sectionTitle" Text="MCP 服务器" />
+                                                <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Config.TabMcp}" />
                                                 <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                           Text="MCP 工具的风险等级由服务端声明决定，未声明只读的一律按危险处理。" />
+                                                           Text="{DynamicResource Loc.Agent.McpRiskHint}" />
                                                 <ItemsControl ItemsSource="{Binding AgentConfig.AvailableMcpServers}">
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate DataType="vm:SelectableLinkViewModel">
@@ -677,49 +1111,146 @@
                                                     </ItemsControl.ItemTemplate>
                                                 </ItemsControl>
                                                 <TextBlock Classes="secondary"
-                                                           Text="尚未配置任何 MCP 服务器，请到「MCP 服务器」标签页添加。"
+                                                           Text="{DynamicResource Loc.Agent.NoMcpServers}"
                                                            IsVisible="{Binding !AgentConfig.HasAvailableMcpServers}" />
                                             </StackPanel>
                                         </Border>
 
                                         <Border Classes="card" Padding="12,10">
                                             <StackPanel Spacing="6">
-                                                <CheckBox Content="允许执行危险工具"
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <TextBlock Grid.Column="0" Classes="sectionTitle"
+                                                               Text="{DynamicResource Loc.Agent.McpResources}"
+                                                               VerticalAlignment="Center" />
+                                                    <Button Grid.Column="1" Command="{Binding AgentConfig.RefreshResourcesCommand}"
+                                                            IsEnabled="{Binding !AgentConfig.IsLoadingResources}"
+                                                            ToolTip.Tip="{DynamicResource Loc.Agent.RefreshResourcesTip}">
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <helpers:SpinningIcon Icon="SpinnerIos"
+                                                                           IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                           IsVisible="{Binding AgentConfig.IsLoadingResources}" />
+                                                            <ic:FluentIcon Icon="ArrowClockwise" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                           IsVisible="{Binding !AgentConfig.IsLoadingResources}" />
+                                                            <TextBlock Text="{DynamicResource Loc.Common.Refresh}" VerticalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Button>
+                                                </Grid>
+                                                <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                           Text="{DynamicResource Loc.Agent.McpResourcesHint}" />
+
+                                                <ItemsControl ItemsSource="{Binding AgentConfig.AvailableResources}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate DataType="vm:SelectableResourceViewModel">
+                                                            <StackPanel Spacing="2" Margin="0,2">
+                                                                <CheckBox IsChecked="{Binding IsSelected}"
+                                                                          IsEnabled="{Binding CanMount}">
+                                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                        <TextBlock Text="{Binding Name}" />
+                                                                        <TextBlock Classes="secondary" Text="{Binding Detail}" />
+                                                                        <TextBlock Classes="secondary" Text="{DynamicResource Loc.Agent.ResourceTemplate}"
+                                                                                   IsVisible="{Binding IsTemplate}" />
+                                                                    </StackPanel>
+                                                                </CheckBox>
+                                                                <TextBlock Classes="secondary" FontSize="11"
+                                                                           Text="{Binding Uri}"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           ToolTip.Tip="{Binding Uri}" />
+                                                                <TextBlock Classes="secondary" FontSize="11"
+                                                                           TextWrapping="Wrap"
+                                                                           Text="{Binding Description}"
+                                                                           IsVisible="{Binding HasDescription}" />
+                                                            </StackPanel>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+
+                                                <TextBlock Classes="secondary"
+                                                           Text="{DynamicResource Loc.Agent.McpResourcesEmpty}"
+                                                           IsVisible="{Binding !AgentConfig.HasAvailableResources}" />
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Border Classes="card" Padding="12,10">
+                                            <StackPanel Spacing="6">
+                                                <CheckBox Content="{DynamicResource Loc.Agent.AllowDangerous}"
                                                           IsChecked="{Binding AgentConfig.AllowDangerousTools}" />
                                                 <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                           Text="关闭时，模型请求危险工具会被拒绝并把拒绝原因回传给它。模型可能被对话内容或工具返回值中的提示注入诱导，开启前请确认该智能体接触的内容是可信的。" />
+                                                           Text="{DynamicResource Loc.Agent.AllowDangerousHint}" />
                                                 <TextBlock Foreground="{DynamicResource DangerBrush}"
                                                            TextWrapping="Wrap"
-                                                           Text="⚠️ 已勾选危险技能但未授权，它们当前不会执行。"
+                                                           Text="{DynamicResource Loc.Agent.DangerousSkillWarning}"
                                                            IsVisible="{Binding AgentConfig.HasUngrantedDangerousSkill}" />
                                             </StackPanel>
                                         </Border>
 
                                         <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <Button Classes="primary" Content="💾 保存"
-                                                    Command="{Binding AgentConfig.SaveCommand}" />
-                                            <Button Content="★ 设为默认"
-                                                    Command="{Binding AgentConfig.SetDefaultCommand}" />
-                                            <Button Content="↻ 恢复默认提示词"
-                                                    Command="{Binding AgentConfig.RestoreDefaultsCommand}" />
+                                            <Button Classes="primary" Command="{Binding AgentConfig.SaveCommand}"
+                                                    IsEnabled="{Binding !AgentConfig.IsBusy}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <helpers:SpinningIcon Icon="SpinnerIos"
+                                                                   IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                   IsVisible="{Binding AgentConfig.IsBusy}" />
+                                                    <ic:FluentIcon Icon="Save" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                   IsVisible="{Binding !AgentConfig.IsBusy}" />
+                                                    <TextBlock Text="{DynamicResource Loc.Common.Save}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Command="{Binding AgentConfig.SetDefaultCommand}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <ic:FluentIcon Icon="Star" IconSize="Resizable" FontSize="15" VerticalAlignment="Center" />
+                                                    <TextBlock Text="{DynamicResource Loc.Common.SetDefault}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button
+    Command="{Binding AgentConfig.RestoreDefaultsCommand}" >
+    <StackPanel Orientation="Horizontal" Spacing="6">
+        <ic:FluentIcon Icon="ArrowReset" IconSize="Resizable" FontSize="20" VerticalAlignment="Center"/>
+        <TextBlock Text="{DynamicResource Loc.Agent.RestorePrompt}" VerticalAlignment="Center"/>
+    </StackPanel>
+</Button>
+                                            <!-- 导入导出要弹文件对话框，只能从窗口这一侧发起 -->
+                                            <Button IsEnabled="{Binding AgentConfig.CanExport}"
+                                                    Click="OnExportAgentClick" >
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <ic:FluentIcon Icon="ArrowDownload" IconSize="Resizable" FontSize="15" VerticalAlignment="Center" />
+                                                    <TextBlock Text="{DynamicResource Loc.Common.Export}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Click="OnImportAgentClick" >
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <ic:FluentIcon Icon="ArrowUpload" IconSize="Resizable" FontSize="15" VerticalAlignment="Center" />
+                                                    <TextBlock Text="{DynamicResource Loc.Common.Import}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
                                         </StackPanel>
 
-                                        <TextBlock Classes="status" Classes.error="{Binding AgentConfig.IsStatusError}" Text="{Binding AgentConfig.StatusMessage}"
-                                                   TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ic:FluentIcon Icon="ErrorCircle" IconSize="Resizable" FontSize="20"
+                                       Foreground="{DynamicResource DangerBrush}"
+                                       IsVisible="{Binding AgentConfig.IsStatusError}"
+                                       VerticalAlignment="Center"/>
+                        <TextBlock Classes="status" Classes.error="{Binding AgentConfig.IsStatusError}"
+                                                   TextWrapping="Wrap"
+                                   Text="{Binding AgentConfig.StatusMessage}"/>
+                    </StackPanel>
                                     </StackPanel>
                                 </ScrollViewer>
                             </Grid>
                         </TabItem>
 
-                        <TabItem Header="技能">
+                        <TabItem Header="{DynamicResource Loc.Config.TabSkills}">
                             <Grid ColumnDefinitions="260,*" Margin="8">
 
                                 <StackPanel Grid.Column="0" Spacing="8">
                                     <Grid ColumnDefinitions="*,Auto">
-                                        <TextBlock Classes="sectionTitle" Text="🧩 技能"
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Skill.Title}"
                                                    VerticalAlignment="Center" />
-                                        <Button Grid.Column="1" Content="+ 新建"
-                                                Command="{Binding SkillConfig.NewSkillCommand}" />
+                                        <Button Grid.Column="1" Command="{Binding SkillConfig.NewSkillCommand}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <ic:FluentIcon Icon="Add" IconSize="Resizable" FontSize="15" VerticalAlignment="Center" />
+                                                <TextBlock Text="{DynamicResource Loc.Common.Create}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
                                     </Grid>
 
                                     <ListBox ItemsSource="{Binding SkillConfig.Skills}"
@@ -728,20 +1259,28 @@
                                             <DataTemplate DataType="vm:SkillListItemViewModel">
                                                 <Grid ColumnDefinitions="*,Auto">
                                                     <StackPanel Grid.Column="0" Spacing="2">
-                                                        <TextBlock Text="{Binding DisplayName}"
-                                                                   FontWeight="SemiBold"
-                                                                   TextWrapping="Wrap" />
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <ic:FluentIcon Icon="Warning" IconSize="Resizable" FontSize="20"
+                                                                           Foreground="{DynamicResource DangerBrush}"
+                                                                           IsVisible="{Binding IsDangerous}"
+                                                                           VerticalAlignment="Center" />
+                                                            <TextBlock Text="{Binding DisplayName}"
+                                                                       FontWeight="SemiBold"
+                                                                       TextWrapping="Wrap" />
+                                                        </StackPanel>
                                                         <TextBlock Text="{Binding Subtitle}"
                                                                    Classes="secondary"
                                                                    TextTrimming="CharacterEllipsis" />
                                                     </StackPanel>
                                                     <Panel Grid.Column="1">
-                                                        <Button Classes="rowDelete" Content="✕"
-                                                                Classes.confirming="{Binding IsConfirmingDelete}"
-                                                                ToolTip.Tip="删除该技能"
-                                                                AutomationProperties.Name="删除该技能"
-                                                                Command="{Binding RequestDeleteCommand}" />
-                                                        <Button Classes="danger" Content="确认删除？"
+                                                        <Button Classes="rowDelete"
+    Classes.confirming="{Binding IsConfirmingDelete}"
+                                                                ToolTip.Tip="{DynamicResource Loc.Skill.DeleteTip}"
+                                                                AutomationProperties.Name="{DynamicResource Loc.Skill.DeleteTip}"
+                                                                Command="{Binding RequestDeleteCommand}" >
+    <ic:FluentIcon Icon="Dismiss" IconSize="Resizable" FontSize="20" />
+</Button>
+                                                        <Button Classes="danger" Content="{DynamicResource Loc.Common.ConfirmDeleteQuestion}"
                                                                 IsVisible="{Binding IsConfirmingDelete}"
                                                                 Command="{Binding RequestDeleteCommand}" />
                                                     </Panel>
@@ -757,9 +1296,9 @@
                                                 IsVisible="{Binding SkillConfig.HasSelection}">
 
                                         <StackPanel Spacing="4">
-                                            <TextBlock Classes="sectionTitle" Text="本地实现" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Skill.LocalImpl}" />
                                             <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                       Text="技能的动作只能来自程序内置的实现，不能由配置任意指定脚本。" />
+                                                       Text="{DynamicResource Loc.Skill.LocalImplHint}" />
                                             <ComboBox ItemsSource="{Binding SkillConfig.AvailableHandlers}"
                                                       SelectedItem="{Binding SkillConfig.SelectedHandler}"
                                                       MinWidth="280">
@@ -775,57 +1314,77 @@
                                         </StackPanel>
 
                                         <StackPanel Spacing="4">
-                                            <TextBlock Classes="sectionTitle" Text="名称" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Common.Name}" />
                                             <TextBox Text="{Binding SkillConfig.Name}"
-                                                     PlaceholderText="显示名称，可用中文" />
+                                                     PlaceholderText="{DynamicResource Loc.Skill.NamePlaceholder}" />
                                         </StackPanel>
 
                                         <StackPanel Spacing="4">
-                                            <TextBlock Classes="sectionTitle" Text="工具名" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Skill.ToolName}" />
                                             <TextBox Text="{Binding SkillConfig.ToolName}"
                                                      PlaceholderText="run_shell" />
                                             <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                       Text="提供给模型的函数名，只能包含字母、数字、下划线和连字符，且必须以字母开头。" />
+                                                       Text="{DynamicResource Loc.Skill.ToolNameHint}" />
                                         </StackPanel>
 
                                         <StackPanel Spacing="4">
-                                            <TextBlock Classes="sectionTitle" Text="描述" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Common.Description}" />
                                             <TextBox Text="{Binding SkillConfig.Description}"
                                                      AcceptsReturn="True" TextWrapping="Wrap" Height="90" />
                                             <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                       Text="这段文字会作为工具说明提供给模型，写清楚何时该用它。" />
+                                                       Text="{DynamicResource Loc.Skill.DescriptionHint}" />
                                         </StackPanel>
 
                                         <StackPanel Spacing="4">
-                                            <TextBlock Classes="sectionTitle" Text="参数结构（JSON Schema）" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Skill.Schema}" />
                                             <TextBox Text="{Binding SkillConfig.ToolSpec}"
                                                      AcceptsReturn="True" TextWrapping="NoWrap"
                                                      FontFamily="Cascadia Mono,Consolas,monospace"
-                                                     FontSize="12" Height="200" />
+                                                     FontSize="20" Height="200" />
                                         </StackPanel>
 
-                                        <CheckBox Content="启用" IsChecked="{Binding SkillConfig.IsEnabled}" />
+                                        <CheckBox Content="{DynamicResource Loc.Common.Enable}" IsChecked="{Binding SkillConfig.IsEnabled}" />
 
-                                        <Button Classes="primary" Content="💾 保存"
-                                                HorizontalAlignment="Left"
-                                                Command="{Binding SkillConfig.SaveCommand}" />
+                                        <Button Classes="primary" HorizontalAlignment="Left"
+                                                Command="{Binding SkillConfig.SaveCommand}"
+                                                IsEnabled="{Binding !SkillConfig.IsBusy}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <helpers:SpinningIcon Icon="SpinnerIos"
+                                                               IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                               IsVisible="{Binding SkillConfig.IsBusy}" />
+                                                <ic:FluentIcon Icon="Save" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                               IsVisible="{Binding !SkillConfig.IsBusy}" />
+                                                <TextBlock Text="{DynamicResource Loc.Common.Save}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
 
-                                        <TextBlock Classes="status" Classes.error="{Binding SkillConfig.IsStatusError}" Text="{Binding SkillConfig.StatusMessage}"
-                                                   TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ic:FluentIcon Icon="ErrorCircle" IconSize="Resizable" FontSize="20"
+                                       Foreground="{DynamicResource DangerBrush}"
+                                       IsVisible="{Binding SkillConfig.IsStatusError}"
+                                       VerticalAlignment="Center"/>
+                        <TextBlock Classes="status" Classes.error="{Binding SkillConfig.IsStatusError}"
+                                                   TextWrapping="Wrap"
+                                   Text="{Binding SkillConfig.StatusMessage}"/>
+                    </StackPanel>
                                     </StackPanel>
                                 </ScrollViewer>
                             </Grid>
                         </TabItem>
 
-                        <TabItem Header="MCP 服务器">
+                        <TabItem Header="{DynamicResource Loc.Config.TabMcp}">
                             <Grid ColumnDefinitions="260,*" Margin="8">
 
                                 <StackPanel Grid.Column="0" Spacing="8">
                                     <Grid ColumnDefinitions="*,Auto">
-                                        <TextBlock Classes="sectionTitle" Text="🔌 MCP 服务器"
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Mcp.Title}"
                                                    VerticalAlignment="Center" />
-                                        <Button Grid.Column="1" Content="+ 新建"
-                                                Command="{Binding McpConfig.NewServerCommand}" />
+                                        <Button Grid.Column="1" Command="{Binding McpConfig.NewServerCommand}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <ic:FluentIcon Icon="Add" IconSize="Resizable" FontSize="15" VerticalAlignment="Center" />
+                                                <TextBlock Text="{DynamicResource Loc.Common.Create}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
                                     </Grid>
 
                                     <ListBox ItemsSource="{Binding McpConfig.Servers}"
@@ -834,20 +1393,32 @@
                                             <DataTemplate DataType="vm:McpServerListItemViewModel">
                                                 <Grid ColumnDefinitions="*,Auto">
                                                     <StackPanel Grid.Column="0" Spacing="2">
-                                                        <TextBlock Text="{Binding DisplayName}"
-                                                                   FontWeight="SemiBold"
-                                                                   TextTrimming="CharacterEllipsis" />
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <ic:FluentIcon Icon="CheckmarkCircle" IconSize="Resizable" FontSize="20"
+                                                                           Foreground="{DynamicResource SuccessBrush}"
+                                                                           IsVisible="{Binding IsEnabled}"
+                                                                           VerticalAlignment="Center" />
+                                                            <ic:FluentIcon Icon="Circle" IconSize="Resizable" FontSize="20"
+                                                                           Foreground="{DynamicResource TextSecondary}"
+                                                                           IsVisible="{Binding IsDisabled}"
+                                                                           VerticalAlignment="Center" />
+                                                            <TextBlock Text="{Binding DisplayName}"
+                                                                       FontWeight="SemiBold"
+                                                                       TextTrimming="CharacterEllipsis" />
+                                                        </StackPanel>
                                                         <TextBlock Text="{Binding Subtitle}"
                                                                    Classes="secondary"
                                                                    TextTrimming="CharacterEllipsis" />
                                                     </StackPanel>
                                                     <Panel Grid.Column="1">
-                                                        <Button Classes="rowDelete" Content="✕"
-                                                                Classes.confirming="{Binding IsConfirmingDelete}"
-                                                                ToolTip.Tip="删除该 MCP 服务器"
-                                                                AutomationProperties.Name="删除该 MCP 服务器"
-                                                                Command="{Binding RequestDeleteCommand}" />
-                                                        <Button Classes="danger" Content="确认删除？"
+                                                        <Button Classes="rowDelete"
+    Classes.confirming="{Binding IsConfirmingDelete}"
+                                                                ToolTip.Tip="{DynamicResource Loc.Mcp.DeleteTip}"
+                                                                AutomationProperties.Name="{DynamicResource Loc.Mcp.DeleteTip}"
+                                                                Command="{Binding RequestDeleteCommand}" >
+    <ic:FluentIcon Icon="Dismiss" IconSize="Resizable" FontSize="20" />
+</Button>
+                                                        <Button Classes="danger" Content="{DynamicResource Loc.Common.ConfirmDeleteQuestion}"
                                                                 IsVisible="{Binding IsConfirmingDelete}"
                                                                 Command="{Binding RequestDeleteCommand}" />
                                                     </Panel>
@@ -863,26 +1434,26 @@
                                                 IsVisible="{Binding McpConfig.HasSelection}">
 
                                         <StackPanel Spacing="4">
-                                            <TextBlock Classes="sectionTitle" Text="名称" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Common.Name}" />
                                             <TextBox Text="{Binding McpConfig.Name}" />
                                         </StackPanel>
 
                                         <StackPanel Spacing="4">
-                                            <TextBlock Classes="sectionTitle" Text="传输方式" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Mcp.Transport}" />
                                             <ComboBox ItemsSource="{Binding McpConfig.AvailableTransports}"
                                                       SelectedItem="{Binding McpConfig.Transport}"
                                                       MinWidth="220" />
                                         </StackPanel>
 
                                         <StackPanel Spacing="4" IsVisible="{Binding McpConfig.IsStdio}">
-                                            <TextBlock Classes="sectionTitle" Text="启动命令" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Mcp.Command}" />
                                             <TextBox Text="{Binding McpConfig.Command}"
                                                      PlaceholderText="npx" />
-                                            <TextBlock Classes="sectionTitle" Text="参数（每行一个）" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Mcp.Args}" />
                                             <TextBox Text="{Binding McpConfig.ArgumentsText}"
                                                      AcceptsReturn="True" TextWrapping="NoWrap"
                                                      FontFamily="Cascadia Mono,Consolas,monospace"
-                                                     FontSize="12" Height="110"
+                                                     FontSize="20" Height="110"
                                                      PlaceholderText="-y&#x0a;@modelcontextprotocol/server-filesystem&#x0a;C:\some\path" />
                                         </StackPanel>
 
@@ -890,83 +1461,413 @@
                                             <TextBlock Classes="sectionTitle" Text="URL" />
                                             <TextBox Text="{Binding McpConfig.Url}"
                                                      PlaceholderText="https://example.com/mcp" />
-                                            <TextBlock Classes="sectionTitle" Text="请求头（每行一个 键=值）" />
+                                            <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Mcp.Headers}" />
                                             <TextBox Text="{Binding McpConfig.HeadersText}"
                                                      AcceptsReturn="True" TextWrapping="NoWrap"
                                                      FontFamily="Cascadia Mono,Consolas,monospace"
-                                                     FontSize="12" Height="90"
+                                                     FontSize="20" Height="90"
                                                      PlaceholderText="Authorization=Bearer xxx" />
                                         </StackPanel>
 
-                                        <CheckBox Content="启用" IsChecked="{Binding McpConfig.IsEnabled}" />
+                                        <CheckBox Content="{DynamicResource Loc.Common.Enable}" IsChecked="{Binding McpConfig.IsEnabled}" />
 
                                         <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <Button Classes="primary" Content="💾 保存"
-                                                    Command="{Binding McpConfig.SaveCommand}" />
-                                            <Button Content="测试连接"
-                                                    IsEnabled="{Binding !McpConfig.IsBusy}"
-                                                    Command="{Binding McpConfig.TestConnectionCommand}" />
+                                            <Button Classes="primary" Command="{Binding McpConfig.SaveCommand}"
+                                                    IsEnabled="{Binding !McpConfig.IsBusy}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <helpers:SpinningIcon Icon="SpinnerIos"
+                                                                   IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                   IsVisible="{Binding McpConfig.IsBusy}" />
+                                                    <ic:FluentIcon Icon="Save" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                   IsVisible="{Binding !McpConfig.IsBusy}" />
+                                                    <TextBlock Text="{DynamicResource Loc.Common.Save}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Command="{Binding McpConfig.TestConnectionCommand}"
+                                                    IsEnabled="{Binding !McpConfig.IsBusy}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <helpers:SpinningIcon Icon="SpinnerIos"
+                                                                   IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                   IsVisible="{Binding McpConfig.IsBusy}" />
+                                                    <ic:FluentIcon Icon="PlugConnected" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                   IsVisible="{Binding !McpConfig.IsBusy}" />
+                                                    <TextBlock Text="{DynamicResource Loc.Common.TestConnection}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
                                         </StackPanel>
 
-                                        <TextBlock Classes="status" Classes.error="{Binding McpConfig.IsStatusError}" Text="{Binding McpConfig.StatusMessage}"
-                                                   TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ic:FluentIcon Icon="ErrorCircle" IconSize="Resizable" FontSize="20"
+                                       Foreground="{DynamicResource DangerBrush}"
+                                       IsVisible="{Binding McpConfig.IsStatusError}"
+                                       VerticalAlignment="Center"/>
+                        <TextBlock Classes="status" Classes.error="{Binding McpConfig.IsStatusError}"
+                                                   TextWrapping="Wrap"
+                                   Text="{Binding McpConfig.StatusMessage}"/>
+                    </StackPanel>
 
                                         <Border Classes="card" Padding="12,10">
                                             <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                       Text="连接在首次对话时按需建立。变更配置后旧连接会作废，下次对话重新连接。" />
+                                                       Text="{DynamicResource Loc.Mcp.ConnectHint}" />
+                                        </Border>
+
+                                        <!-- ============ 服务器内容总览 ============ -->
+                                        <Border Classes="card" Padding="12,10">
+                                            <StackPanel Spacing="6">
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <TextBlock Grid.Column="0" Classes="sectionTitle"
+                                                               Text="{DynamicResource Loc.Mcp.Content}"
+                                                               VerticalAlignment="Center" />
+                                                    <Button Grid.Column="1" Command="{Binding McpConfig.LoadAllCommand}"
+                                                            IsEnabled="{Binding !McpConfig.IsBrowsing}">
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <helpers:SpinningIcon Icon="SpinnerIos"
+                                                                           IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                           IsVisible="{Binding McpConfig.IsBrowsing}" />
+                                                            <ic:FluentIcon Icon="ArrowSync" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                           IsVisible="{Binding !McpConfig.IsBrowsing}" />
+                                                            <TextBlock Text="{DynamicResource Loc.Mcp.LoadAll}" VerticalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Button>
+                                                </Grid>
+                                                <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                           Text="{DynamicResource Loc.Mcp.ContentHint}" />
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- ============ 工具浏览 ============ -->
+                                        <Border Classes="card" Padding="12,10">
+                                            <StackPanel Spacing="6">
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <TextBlock Grid.Column="0" Classes="sectionTitle"
+                                                               Text="{DynamicResource Loc.Mcp.Tools}"
+                                                               VerticalAlignment="Center" />
+                                                    <Button Grid.Column="1" Command="{Binding McpConfig.LoadToolsCommand}"
+                                                            IsEnabled="{Binding !McpConfig.IsBrowsing}">
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <helpers:SpinningIcon Icon="SpinnerIos"
+                                                                           IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                           IsVisible="{Binding McpConfig.IsBrowsing}" />
+                                                            <ic:FluentIcon Icon="ArrowSync" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                           IsVisible="{Binding !McpConfig.IsBrowsing}" />
+                                                            <TextBlock Text="{DynamicResource Loc.Common.Load}" VerticalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Button>
+                                                </Grid>
+                                                <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                           Text="{DynamicResource Loc.Mcp.ToolsHint}" />
+
+                                                <ListBox ItemsSource="{Binding McpConfig.Tools}"
+                                                         SelectedItem="{Binding McpConfig.SelectedTool}"
+                                                         MaxHeight="180"
+                                                         IsVisible="{Binding McpConfig.HasTools}">
+                                                    <ListBox.ItemTemplate>
+                                                        <DataTemplate DataType="vm:McpToolItemViewModel">
+                                                            <StackPanel Spacing="1">
+                                                                <Grid ColumnDefinitions="*,Auto">
+                                                                    <TextBlock Grid.Column="0"
+                                                                               Text="{Binding DisplayName}"
+                                                                               FontWeight="SemiBold"
+                                                                               TextTrimming="CharacterEllipsis" />
+                                                                    <TextBlock Grid.Column="1"
+                                                                               Classes="secondary" FontSize="11"
+                                                                               Text="{Binding RiskLabel}" />
+                                                                </Grid>
+                                                                <TextBlock Classes="secondary" FontSize="11"
+                                                                           Text="{Binding Name}"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           IsVisible="{Binding ShowBothNames}" />
+                                                                <TextBlock Classes="secondary" FontSize="11"
+                                                                           Text="{Binding ParameterSummary}"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           ToolTip.Tip="{Binding Description}" />
+                                                            </StackPanel>
+                                                        </DataTemplate>
+                                                    </ListBox.ItemTemplate>
+                                                </ListBox>
+
+                                                <StackPanel Spacing="4"
+                                                            IsVisible="{Binding McpConfig.SelectedTool, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                               Text="{Binding McpConfig.SelectedTool.Description}"
+                                                               IsVisible="{Binding McpConfig.SelectedTool.HasDescription}" />
+                                                    <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Mcp.ToolSchema}"
+                                                               IsVisible="{Binding McpConfig.SelectedTool.HasSchema}" />
+                                                    <Border Classes="toolResult"
+                                                            IsVisible="{Binding McpConfig.SelectedTool.HasSchema}">
+                                                        <ScrollViewer MaxHeight="200"
+                                                                      VerticalScrollBarVisibility="Auto"
+                                                                      HorizontalScrollBarVisibility="Disabled">
+                                                            <SelectableTextBlock
+                                                                Text="{Binding McpConfig.SelectedTool.SchemaText}"
+                                                                TextWrapping="Wrap"
+                                                                FontFamily="Cascadia Mono,Consolas,monospace"
+                                                                FontSize="20" />
+                                                        </ScrollViewer>
+                                                    </Border>
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- ============ 资源浏览 ============ -->
+                                        <Border Classes="card" Padding="12,10">
+                                            <StackPanel Spacing="6">
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <TextBlock Grid.Column="0" Classes="sectionTitle"
+                                                               Text="{DynamicResource Loc.Mcp.Resources}"
+                                                               VerticalAlignment="Center" />
+                                                    <Button Grid.Column="1" Command="{Binding McpConfig.LoadResourcesCommand}"
+                                                            IsEnabled="{Binding !McpConfig.IsBrowsing}">
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <helpers:SpinningIcon Icon="SpinnerIos"
+                                                                           IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                           IsVisible="{Binding McpConfig.IsBrowsing}" />
+                                                            <ic:FluentIcon Icon="ArrowSync" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                           IsVisible="{Binding !McpConfig.IsBrowsing}" />
+                                                            <TextBlock Text="{DynamicResource Loc.Common.Load}" VerticalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Button>
+                                                </Grid>
+                                                <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                           Text="{DynamicResource Loc.Mcp.ResourcesHint}" />
+
+                                                <ListBox ItemsSource="{Binding McpConfig.Resources}"
+                                                         SelectedItem="{Binding McpConfig.SelectedResource}"
+                                                         MaxHeight="160"
+                                                         IsVisible="{Binding McpConfig.HasResources}">
+                                                    <ListBox.ItemTemplate>
+                                                        <DataTemplate DataType="vm:McpResourceItemViewModel">
+                                                            <StackPanel Spacing="1">
+                                                                <TextBlock Text="{Binding Name}"
+                                                                           FontWeight="SemiBold"
+                                                                           TextTrimming="CharacterEllipsis" />
+                                                                <TextBlock Classes="secondary" FontSize="11"
+                                                                           Text="{Binding Subtitle}"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           ToolTip.Tip="{Binding Uri}" />
+                                                            </StackPanel>
+                                                        </DataTemplate>
+                                                    </ListBox.ItemTemplate>
+                                                </ListBox>
+
+                                                <Button HorizontalAlignment="Left"
+                                                        Command="{Binding McpConfig.ReadSelectedResourceCommand}"
+                                                        IsEnabled="{Binding !McpConfig.IsBrowsing}"
+                                                        IsVisible="{Binding McpConfig.SelectedResource, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                        <helpers:SpinningIcon Icon="SpinnerIos"
+                                                                       IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                       IsVisible="{Binding McpConfig.IsBrowsing}" />
+                                                        <ic:FluentIcon Icon="Document" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                       IsVisible="{Binding !McpConfig.IsBrowsing}" />
+                                                        <TextBlock Text="{DynamicResource Loc.Mcp.ReadContent}" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+
+                                                <Border Classes="toolResult" IsVisible="{Binding McpConfig.ResourceContentText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                    <ScrollViewer MaxHeight="240"
+                                                                  VerticalScrollBarVisibility="Auto"
+                                                                  HorizontalScrollBarVisibility="Disabled">
+                                                        <SelectableTextBlock Text="{Binding McpConfig.ResourceContentText}"
+                                                                             TextWrapping="Wrap"
+                                                                             FontFamily="Cascadia Mono,Consolas,monospace"
+                                                                             FontSize="20" />
+                                                    </ScrollViewer>
+                                                </Border>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- ============ 提示模板浏览 ============ -->
+                                        <Border Classes="card" Padding="12,10">
+                                            <StackPanel Spacing="6">
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <TextBlock Grid.Column="0" Classes="sectionTitle"
+                                                               Text="{DynamicResource Loc.Mcp.Prompts}"
+                                                               VerticalAlignment="Center" />
+                                                    <Button Grid.Column="1" Command="{Binding McpConfig.LoadPromptsCommand}"
+                                                            IsEnabled="{Binding !McpConfig.IsBrowsing}">
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <helpers:SpinningIcon Icon="SpinnerIos"
+                                                                           IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                           IsVisible="{Binding McpConfig.IsBrowsing}" />
+                                                            <ic:FluentIcon Icon="ArrowSync" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                           IsVisible="{Binding !McpConfig.IsBrowsing}" />
+                                                            <TextBlock Text="{DynamicResource Loc.Common.Load}" VerticalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Button>
+                                                </Grid>
+                                                <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                           Text="{DynamicResource Loc.Mcp.PromptsHint}" />
+
+                                                <ListBox ItemsSource="{Binding McpConfig.Prompts}"
+                                                         SelectedItem="{Binding McpConfig.SelectedPrompt}"
+                                                         MaxHeight="160"
+                                                         IsVisible="{Binding McpConfig.HasPrompts}">
+                                                    <ListBox.ItemTemplate>
+                                                        <DataTemplate DataType="vm:McpPromptItemViewModel">
+                                                            <StackPanel Spacing="1">
+                                                                <TextBlock Text="{Binding DisplayName}"
+                                                                           FontWeight="SemiBold"
+                                                                           TextTrimming="CharacterEllipsis" />
+                                                                <TextBlock Classes="secondary" FontSize="11"
+                                                                           Text="{Binding ArgumentSummary}"
+                                                                           TextTrimming="CharacterEllipsis" />
+                                                            </StackPanel>
+                                                        </DataTemplate>
+                                                    </ListBox.ItemTemplate>
+                                                </ListBox>
+
+                                                <StackPanel Spacing="4"
+                                                            IsVisible="{Binding McpConfig.SelectedPrompt, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                               Text="{Binding McpConfig.SelectedPrompt.Description}"
+                                                               IsVisible="{Binding McpConfig.SelectedPrompt.HasDescription}" />
+
+                                                    <ItemsControl ItemsSource="{Binding McpConfig.PromptArguments}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate DataType="vm:PromptArgumentInput">
+                                                                <StackPanel Spacing="2" Margin="0,3">
+                                                                    <TextBlock Text="{Binding Label}" />
+                                                                    <TextBox Text="{Binding Value}" />
+                                                                    <TextBlock Classes="secondary" FontSize="11"
+                                                                               TextWrapping="Wrap"
+                                                                               Text="{Binding Description}"
+                                                                               IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                                </StackPanel>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+
+                                                    <Button HorizontalAlignment="Left"
+                                                            Command="{Binding McpConfig.GetSelectedPromptCommand}"
+                                                            IsEnabled="{Binding !McpConfig.IsBrowsing}">
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <helpers:SpinningIcon Icon="SpinnerIos"
+                                                                           IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                           IsVisible="{Binding McpConfig.IsBrowsing}" />
+                                                            <ic:FluentIcon Icon="ArrowMaximize" IconSize="Resizable" FontSize="15" VerticalAlignment="Center"
+                                                                           IsVisible="{Binding !McpConfig.IsBrowsing}" />
+                                                            <TextBlock Text="{DynamicResource Loc.Mcp.Expand}" VerticalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Button>
+                                                </StackPanel>
+
+                                                <Border Classes="toolResult" IsVisible="{Binding McpConfig.PromptResultText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                    <ScrollViewer MaxHeight="240"
+                                                                  VerticalScrollBarVisibility="Auto"
+                                                                  HorizontalScrollBarVisibility="Disabled">
+                                                        <SelectableTextBlock Text="{Binding McpConfig.PromptResultText}"
+                                                                             TextWrapping="Wrap"
+                                                                             FontFamily="Cascadia Mono,Consolas,monospace"
+                                                                             FontSize="20" />
+                                                    </ScrollViewer>
+                                                </Border>
+                                            </StackPanel>
                                         </Border>
                                     </StackPanel>
                                 </ScrollViewer>
                             </Grid>
                         </TabItem>
 
-                        <TabItem Header="偏好设置">
+                        <TabItem Header="{DynamicResource Loc.Config.TabPreferences}">
                             <ScrollViewer>
                                 <StackPanel Margin="8" Spacing="10" MaxWidth="560"
                                             HorizontalAlignment="Left">
 
-                                    <TextBlock Classes="sectionTitle" Text="统计显示" />
-                                    <CheckBox Content="显示统计信息"
+                                    <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Pref.StatisticsSection}" />
+                                    <CheckBox Content="{DynamicResource Loc.Pref.ShowStatistics}"
                                               IsChecked="{Binding Preferences.ShowStatistics}" />
-                                    <CheckBox Content="显示费用"
+                                    <CheckBox Content="{DynamicResource Loc.Pref.ShowCost}"
                                               IsChecked="{Binding Preferences.ShowCost}" />
-                                    <CheckBox Content="始终显示详细 Token（输入/输出分开）"
+                                    <CheckBox Content="{DynamicResource Loc.Pref.ShowDetailedTokens}"
                                               IsChecked="{Binding Preferences.ShowDetailedTokens}" />
-                                    <CheckBox Content="默认展开消息统计"
+                                    <CheckBox Content="{DynamicResource Loc.Pref.ExpandStatistics}"
                                               IsChecked="{Binding Preferences.ExpandStatisticsByDefault}" />
 
                                     <StackPanel Spacing="4">
-                                        <TextBlock Classes="sectionTitle" Text="货币单位" />
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Pref.Currency}" />
                                         <ComboBox ItemsSource="{Binding Preferences.AvailableCurrencies}"
                                                   SelectedItem="{Binding Preferences.Currency}"
                                                   MinWidth="160" />
                                         <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                   Text="仅改变显示符号；模型定价按所选货币填写，不做汇率换算。" />
+                                                   Text="{DynamicResource Loc.Pref.CurrencyHint}" />
                                     </StackPanel>
 
-                                    <TextBlock Classes="sectionTitle" Text="主题" Margin="0,8,0,8" />
+                                    <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Pref.Theme}" Margin="0,8,0,8" />
                                     <ComboBox ItemsSource="{Binding Preferences.AvailableThemes}"
                                               SelectedItem="{Binding Preferences.Theme}"
                                               MinWidth="160" />
 
-                                    <TextBlock Classes="sectionTitle" Text="默认智能体" Margin="0,8,0,8" />
+                                    <StackPanel Spacing="4" Margin="0,8,0,0">
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Pref.WindowBlur}" />
+                                        <ComboBox ItemsSource="{Binding Preferences.AvailableBlurModes}"
+                                                  SelectedItem="{Binding Preferences.WindowBlur, Converter={StaticResource BlurModeConverter}}"
+                                                  MinWidth="220">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:BlurModeOption">
+                                                    <TextBlock Text="{Binding DisplayName}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                        <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                   Text="{DynamicResource Loc.Pref.WindowBlurHint}" />
+                                    </StackPanel>
+
+                                    <StackPanel Spacing="4" Margin="0,8,0,0">
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Pref.Language}" />
+                                        <ComboBox ItemsSource="{Binding Preferences.AvailableLanguages}"
+                                                  SelectedItem="{Binding Preferences.SelectedLanguage}"
+                                                  MinWidth="160">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="services:LanguageOption">
+                                                    <TextBlock Text="{Binding NativeName}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                        <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                   Text="{DynamicResource Loc.Pref.LanguageHint}" />
+                                    </StackPanel>
+
+                                    <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Pref.DefaultAgent}" Margin="0,8,0,8" />
                                     <ComboBox ItemsSource="{Binding Preferences.AvailableAgents}"
                                               SelectedItem="{Binding Preferences.DefaultAgent}"
                                               MinWidth="220">
                                         <ComboBox.ItemTemplate>
                                             <DataTemplate x:DataType="vm:AgentListItemViewModel">
-                                                <TextBlock Text="{Binding DisplayName}" />
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <ic:FluentIcon Icon="Star" IconVariant="Filled" IconSize="Resizable" FontSize="20"
+                                                                   Foreground="{DynamicResource AccentBrush}"
+                                                                   IsVisible="{Binding IsDefault}"
+                                                                   VerticalAlignment="Center" />
+                                                    <TextBlock Text="{Binding DisplayName}" />
+                                                </StackPanel>
                                             </DataTemplate>
                                         </ComboBox.ItemTemplate>
                                     </ComboBox>
 
                                     <StackPanel Spacing="4" Margin="0,8,0,0">
-                                        <TextBlock Classes="sectionTitle" Text="请求超时（秒）" />
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Pref.Timeout}" />
                                         <NumericUpDown Value="{Binding Preferences.RequestTimeoutSeconds}"
                                                        Minimum="10" Maximum="3600"
                                                        Increment="10" />
                                         <TextBlock Classes="secondary" TextWrapping="Wrap"
-                                                   Text="单次生成的总时长上限，不是空闲检测。长回答可适当调大。" />
+                                                   Text="{DynamicResource Loc.Pref.TimeoutHint}" />
+                                    </StackPanel>
+
+                                    <StackPanel Spacing="4" Margin="0,8,0,0">
+                                        <TextBlock Classes="sectionTitle" Text="{DynamicResource Loc.Pref.MaxToolRounds}" />
+                                        <NumericUpDown Value="{Binding Preferences.MaxToolRounds}"
+                                                       Minimum="1" Maximum="20"
+                                                       Increment="1" />
+                                        <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                   Text="{DynamicResource Loc.Pref.MaxToolRoundsHint}" />
+                                    </StackPanel>
+
+                                    <StackPanel Spacing="4" Margin="0,8,0,0">
+                                        <CheckBox Content="{DynamicResource Loc.Pref.ConfirmDangerous}"
+                                                  IsChecked="{Binding Preferences.ConfirmDangerousTools}" />
+                                        <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                   Text="{DynamicResource Loc.Pref.ConfirmDangerousHint}" />
                                     </StackPanel>
                                 </StackPanel>
                             </ScrollViewer>
@@ -975,47 +1876,5 @@
                 </Grid>
             </Grid>
         </Grid>
-
-        <!-- ==================== 状态栏 ==================== -->
-        <Border Grid.Row="1" Name="StatusBar" Padding="14,5"
-                Background="{DynamicResource PanelBackground}"
-                BorderBrush="{DynamicResource BorderSubtle}"
-                BorderThickness="0,1,0,0">
-            <Grid ColumnDefinitions="Auto,Auto,*,Auto">
-                <!-- 连接指示：用两段互相排斥的文本，避免给 Run 绑 IsVisible -->
-                <Panel Grid.Column="0">
-                    <TextBlock Text="●" FontSize="12" VerticalAlignment="Center"
-                               Foreground="{DynamicResource SuccessBrush}"
-                               IsVisible="{Binding IsProviderConfigured}"
-                               ToolTip.Tip="供应商配置完整" />
-                    <TextBlock Text="○" FontSize="12" VerticalAlignment="Center"
-                               Foreground="{DynamicResource TextSecondary}"
-                               IsVisible="{Binding !IsProviderConfigured}"
-                               ToolTip.Tip="尚未配置供应商" />
-                </Panel>
-
-                <!-- 限宽并省略：预设名加长模型名会挤窄中间的状态消息，
-                     甚至把右侧的"生成中…"顶出可视区 -->
-                <TextBlock Grid.Column="1" Margin="6,0,0,0" FontSize="12"
-                           VerticalAlignment="Center"
-                           MaxWidth="260"
-                           TextTrimming="CharacterEllipsis"
-                           Foreground="{DynamicResource TextSecondary}"
-                           ToolTip.Tip="{Binding ProviderModelText}"
-                           Text="{Binding ProviderModelText}" />
-
-                <TextBlock Grid.Column="2" Margin="16,0" FontSize="12"
-                           VerticalAlignment="Center"
-                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                           Classes.error="{Binding IsStatusError}"
-                           Text="{Binding StatusMessage}"
-                           ToolTip.Tip="{Binding StatusMessage}" />
-
-                <TextBlock Grid.Column="3" FontSize="12"
-                           VerticalAlignment="Center"
-                           Foreground="{DynamicResource TextSecondary}"
-                           Text="{Binding BusyMessage}" />
-            </Grid>
-        </Border>
     </Grid>
 </Window>

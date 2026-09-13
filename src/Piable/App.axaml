@@ -1,5 +1,8 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:helpers="using:Piable.Helpers"
+             xmlns:ic="using:FluentIcons.Avalonia"
+             xmlns:vm="using:Piable.ViewModels"
              x:Class="Piable.App"
              RequestedThemeVariant="Default">
 
@@ -16,10 +19,114 @@
                 <ResourceInclude Source="avares://LiveMarkdown.Avalonia/Defaults.axaml" />
             </ResourceDictionary.MergedDictionaries>
 
+            <!-- 模糊模式（偏好里存字符串，界面选 BlurModeOption）的互转。 -->
+            <helpers:BlurModeConverter x:Key="BlurModeConverter" />
+
+            <!-- 供应商选项（内置预设 / 自定义）映射到对应的 Fluent 图标。 -->
+            <helpers:ProviderIconConverter x:Key="ProviderIconConverter" />
+
+            <!-- 供应商芯片的选中高亮（替代 DataTrigger：Avalonia 12 核心已移除 DataTrigger）。 -->
+            <helpers:ProviderSelectedConverter x:Key="ProviderSelectedConverter" />
+
+            <!-- 供应商芯片（按钮组里的一项） -->
+            <DataTemplate x:Key="ProviderChipTemplate" x:DataType="vm:ProviderChoice">
+                <Button Classes="providerTab" Margin="0,0,8,8"
+                        Command="{Binding ((vm:MainWindowViewModel)DataContext).ProviderConfig.SelectChoiceCommand,
+                                          RelativeSource={RelativeSource FindAncestor, AncestorType=ItemsControl}}"
+                        CommandParameter="{Binding}">
+                    <Button.Background>
+                        <MultiBinding Converter="{StaticResource ProviderSelectedConverter}" ConverterParameter="bg">
+                            <Binding />
+                            <Binding RelativeSource="{RelativeSource FindAncestor, AncestorType=ItemsControl}"
+                                    Path="((vm:MainWindowViewModel)DataContext).ProviderConfig.SelectedChoice" />
+                        </MultiBinding>
+                    </Button.Background>
+                    <Button.BorderBrush>
+                        <MultiBinding Converter="{StaticResource ProviderSelectedConverter}" ConverterParameter="border">
+                            <Binding />
+                            <Binding RelativeSource="{RelativeSource FindAncestor, AncestorType=ItemsControl}"
+                                    Path="((vm:MainWindowViewModel)DataContext).ProviderConfig.SelectedChoice" />
+                        </MultiBinding>
+                    </Button.BorderBrush>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ic:FluentIcon Icon="{Binding Converter={StaticResource ProviderIconConverter}}"
+                                       IconSize="Resizable" FontSize="16"
+                                       VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding DisplayName}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+            </DataTemplate>
+
+            <!-- 「+ 新建」按钮（按钮组末尾的哨兵项）。复用 providerTab 外观，
+                 与前面的供应商芯片共用一套间距/对齐，看起来就是同一组里的一员；
+                 间距由芯片自身的 Margin 统一提供。 -->
+            <DataTemplate x:Key="NewProviderTemplate">
+                <Button Classes="providerTab" Margin="0,0,8,8"
+                        ToolTip.Tip="{DynamicResource Loc.Provider.CreateTip}"
+                        Command="{Binding ((vm:MainWindowViewModel)DataContext).ProviderConfig.CreateCustomCommand,
+                                          RelativeSource={RelativeSource FindAncestor, AncestorType=ItemsControl}}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ic:FluentIcon Icon="Add" IconSize="Resizable" FontSize="16" VerticalAlignment="Center" />
+                        <TextBlock Text="{DynamicResource Loc.Provider.Create}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+            </DataTemplate>
+
+            <!-- 「删除」按钮（紧跟在「+ 新建」之后）。仅当选中自定义供应商时可见，
+                 内置预设不显示。复用 providerTab 外观，保持与同一组里其他按钮一致的间距与对齐。 -->
+            <DataTemplate x:Key="DeleteProviderTemplate">
+                <Button Classes="providerTab" Margin="0,0,8,8"
+                        ToolTip.Tip="{DynamicResource Loc.Provider.DeleteTip}"
+                        Foreground="{DynamicResource DangerBrush}"
+                        IsVisible="{Binding ((vm:MainWindowViewModel)DataContext).ProviderConfig.IsCustomProvider,
+                                           RelativeSource={RelativeSource FindAncestor, AncestorType=ItemsControl}}"
+                        Command="{Binding ((vm:MainWindowViewModel)DataContext).ProviderConfig.DeleteCustomCommand,
+                                          RelativeSource={RelativeSource FindAncestor, AncestorType=ItemsControl}}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ic:FluentIcon Icon="Delete" IconSize="Resizable" FontSize="16" VerticalAlignment="Center" />
+                        <TextBlock Text="{DynamicResource Loc.Provider.Delete}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <Button.Flyout>
+                        <Flyout Placement="Bottom">
+                            <StackPanel Width="260" Spacing="8">
+                                <TextBlock TextWrapping="Wrap"
+                                           Text="{Binding ((vm:MainWindowViewModel)DataContext).ProviderConfig.DeleteConfirmText,
+                                                  RelativeSource={RelativeSource FindAncestor, AncestorType=ItemsControl}}" />
+                                <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                           Text="{DynamicResource Loc.Provider.DeleteNote}" />
+                                <Button Classes="danger"
+                                        Content="{DynamicResource Loc.Common.ConfirmDelete}"
+                                        HorizontalAlignment="Right"
+                                        Command="{Binding ((vm:MainWindowViewModel)DataContext).ProviderConfig.DeleteCustomCommand,
+                                                  RelativeSource={RelativeSource FindAncestor, AncestorType=ItemsControl}}" />
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+            </DataTemplate>
+
+            <!-- 选择按钮组的 IDataTemplate：普通供应商渲染成图标芯片，「+ 新建」哨兵渲染成新建按钮，
+                 「删除」哨兵渲染成删除按钮。Avalonia 12 已移除 DataTemplateSelector，这里用 IDataTemplate 按项类型分派。 -->
+            <helpers:ProviderSelectorTemplate x:Key="ProviderSelectorTemplate"
+                                              ProviderTemplate="{StaticResource ProviderChipTemplate}"
+                                              NewTemplate="{StaticResource NewProviderTemplate}"
+                                              DeleteTemplate="{StaticResource DeleteProviderTemplate}" />
+
             <ResourceDictionary.ThemeDictionaries>
 
                 <ResourceDictionary x:Key="Light">
                     <SolidColorBrush x:Key="AppBackground" Color="#F5F6F8" />
+
+                    <!-- LiveMarkdown / Mermaid 的资源键（默认是深色取向，这里覆盖成浅色主题配色，
+                         让代码块背景、表格、引用边框以及 Mermaid 图表的文字/描边/填充跟随浅色主题）。 -->
+                    <Color x:Key="ForegroundColor">#1B1D1F</Color>
+                    <Color x:Key="BorderColor">#DDE0E4</Color>
+                    <Color x:Key="CardBackgroundColor">#FFFFFF</Color>
+                    <Color x:Key="SecondaryCardBackgroundColor">#EBEDF0</Color>
+                    <!-- 开启原生模糊时窗口的底色：留出透明度让系统背板透出来。
+                         不支持模糊的系统会由 TopLevel 的透明后备落回不透明的 AppBackground，故这里偏透明也安全。 -->
+                    <SolidColorBrush x:Key="WindowTint" Color="#B3F5F6F8" />
                     <SolidColorBrush x:Key="PanelBackground" Color="#EBEDF0" />
                     <SolidColorBrush x:Key="SurfaceBackground" Color="#FFFFFF" />
                     <SolidColorBrush x:Key="BorderSubtle" Color="#DDE0E4" />
@@ -40,6 +147,14 @@
 
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="AppBackground" Color="#1A1C1F" />
+
+                    <!-- 同上：LiveMarkdown / Mermaid 资源键的深色配色（接近库默认值，
+                         这里显式写出以便与本项目调色板保持一致）。 -->
+                    <Color x:Key="ForegroundColor">#E8EAED</Color>
+                    <Color x:Key="BorderColor">#34383C</Color>
+                    <Color x:Key="CardBackgroundColor">#232629</Color>
+                    <Color x:Key="SecondaryCardBackgroundColor">#141618</Color>
+                    <SolidColorBrush x:Key="WindowTint" Color="#B31A1C1F" />
                     <SolidColorBrush x:Key="PanelBackground" Color="#141618" />
                     <SolidColorBrush x:Key="SurfaceBackground" Color="#232629" />
                     <SolidColorBrush x:Key="BorderSubtle" Color="#34383C" />
@@ -67,6 +182,10 @@
              都会退化成无样式的纯文本，且不会给出任何报错。 -->
         <StyleInclude Source="avares://LiveMarkdown.Avalonia/Styles.axaml" />
 
+        <!-- Mermaid 图表样式：定义 MermaidPresenter 的字体/描边/填充默认值，
+             这些值引用 LiveMarkdown 的资源键（ForegroundColor 等），已在下方主题字典里按浅色/深色覆盖。 -->
+        <StyleInclude Source="avares://LiveMarkdown.Avalonia.Mermaid/Styles.axaml" />
+
         <!-- 全局文字色：避免每处控件都要显式声明 -->
         <Style Selector="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
@@ -89,6 +208,18 @@
         <Style Selector="Button.flat:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource HoverOverlay}" />
         </Style>
+        <!-- 激活态（如停在配置视图时的「⚙ 配置」入口）。
+             放在 pointerover 之后：两者优先级相同时后定义的胜出，
+             悬停在激活按钮上时才不会掉回普通悬停色。 -->
+        <Style Selector="Button.flat.active">
+            <Setter Property="Background" Value="{DynamicResource AccentSubtle}" />
+        </Style>
+        <!-- 侧边栏折叠态：整条只剩 48px，底部入口退化成一个居中的图标。
+             必须放在 .flat 之后——同优先级下后定义的胜出，否则内容仍是左对齐。 -->
+        <Style Selector="Button.flat.narrow">
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="Padding" Value="10,7" />
+        </Style>
 
         <!-- 主行动按钮 -->
         <Style Selector="Button.primary">
@@ -97,6 +228,11 @@
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Padding" Value="14,8" />
             <Setter Property="CornerRadius" Value="6" />
+            <!-- 必须显式居中：默认是 Stretch，内容会被拉满内容区，
+                 TextBlock 里的文字于是按左对齐排。文字比按钮窄时（发送/停止只有两个字，
+                 而 MinWidth 撑到 72）就表现为文字贴左、右边空一截。 -->
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
@@ -192,6 +328,28 @@
             <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <!-- 供应商选择按钮组：用 ItemsControl + WrapPanel 承载一排可点的芯片，
+             选中态由芯片自身的 MultiBinding 高亮（见 ProviderChipTemplate），不依赖 ListBox 选中。 -->
+        <Style Selector="ItemsControl.providerTabs">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+
+        <!-- 供应商芯片按钮（按钮组里的一项）。背景/边框的选中色由 MultiBinding 动态给出，
+             这里只定基础外观与悬停。 -->
+        <Style Selector="Button.providerTab">
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Background" Value="{DynamicResource SurfaceBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+        <Style Selector="Button.providerTab:pointerover">
+            <Setter Property="Background" Value="{DynamicResource HoverOverlay}" />
         </Style>
     </Application.Styles>
 </Application>

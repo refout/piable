@@ -2,7 +2,9 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Markup.Xaml.MarkupExtensions;
 using Avalonia.Styling;
+using LiveMarkdown.Avalonia;
 using Microsoft.Extensions.DependencyInjection;
 using Piable.Helpers;
 using Piable.Services;
@@ -17,7 +19,34 @@ public partial class App : Application
 {
     private ServiceProvider? _services;
 
-    public override void Initialize() => AvaloniaXamlLoader.Load(this);
+    public override void Initialize()
+    {
+        AvaloniaXamlLoader.Load(this);
+
+        // Markdown 扩展（Mermaid 图表）必须在任何 MarkdownRenderer 实例化之前注册一次。
+        // UseMermaid 往 Markdig 管线追加 mermaid 代码块解析；Register<MermaidBlockNode>
+        // 让渲染器把 ```mermaid 块映射成原生 MermaidPresenter。两者都是静态注册，重复调用无害。
+        RegisterMarkdownExtensions();
+
+        // 先把默认语言灌进资源字典：窗口比偏好从数据库里读出来要早，
+        // 少了这一步，首帧的 {DynamicResource Loc.xxx} 全都是空值。
+        //
+        // 传 this.Resources 而不是走 Application.Current：此刻静态的 Current 尚未赋值，
+        // 走默认路径会静默地什么都不做，界面于是一片空白。
+        LocalizedResources.Apply(Loc.Service, Resources);
+    }
+
+    /// <summary>
+    /// 注册 LiveMarkdown 的可选扩展。Mermaid 图表支持需要：
+    /// 1. 往 Markdig 管线追加 UseMermaid（解析 ```mermaid 代码块）；
+    /// 2. 注册 MermaidBlockNode（把该块渲染成原生 MermaidPresenter）。
+    /// 必须在 MarkdownRenderer 创建前调用，故放在 Application.Initialize 里。
+    /// </summary>
+    private static void RegisterMarkdownExtensions()
+    {
+        MarkdownRenderer.ConfigurePipeline += pipeline => pipeline.UseMermaid();
+        MarkdownNode.Register<MermaidBlockNode>();
+    }
 
     public override void OnFrameworkInitializationCompleted()
     {
@@ -26,9 +55,10 @@ public partial class App : Application
             _services = BuildServices();
 
             var viewModel = _services.GetRequiredService<MainWindowViewModel>();
-            viewModel.ThemeChangeRequested += (_, theme) => ApplyTheme(theme);
-
             var window = new MainWindow { DataContext = viewModel };
+
+            viewModel.ThemeChangeRequested += (_, theme) => ApplyTheme(window, theme);
+            viewModel.WindowBlurChangeRequested += (_, mode) => ApplyWindowBlur(window, mode);
 
             // 尺寸必须在窗口显示之后再定：窗口尚未创建平台句柄时 Screens 为 null，
             // 那时算不出可用区域，只能退回 XAML 里写死的 1100×720 ——
@@ -55,6 +85,10 @@ public partial class App : Application
 
         var paths = AppPaths.CreateDefault();
         services.AddSingleton(paths);
+
+        // 全进程共用同一个实例：C# 侧的 Loc.Get 走静态门面 Loc.Service，
+        // 注册的是同一个对象，界面与运行时消息才不会各说一种语言。
+        services.AddSingleton<ILocalizationService>(_ => Loc.Service);
         services.AddSingleton<ISecretProtector>(_ => AesGcmSecretProtector.LoadOrCreate(paths.KeyFilePath));
         services.AddSingleton(_ => new PiableDatabase(paths.DatabasePath));
 
@@ -83,6 +117,10 @@ public partial class App : Application
             sp.GetRequiredService<IMcpClientService>(),
             sp.GetRequiredService<IConfigService>()));
 
+        services.AddSingleton<IAgentResourceService>(sp => new AgentResourceService(
+            sp.GetRequiredService<IMcpClientService>(),
+            sp.GetRequiredService<IConfigService>()));
+
         services.AddSingleton<ISessionService>(sp => new SessionService(
             sp.GetRequiredService<SessionRepository>()));
 
@@ -106,6 +144,7 @@ public partial class App : Application
             sp.GetRequiredService<IModelListService>(),
             sp.GetRequiredService<ISkillService>(),
             sp.GetRequiredService<IToolCatalog>(),
+            sp.GetRequiredService<IAgentResourceService>(),
             sp.GetRequiredService<IMcpClientService>()));
 
         return services.BuildServiceProvider();
@@ -122,6 +161,10 @@ public partial class App : Application
             await database.RestoreFromBackupIfNeededAsync(paths.BackupPath).ConfigureAwait(true);
             await database.InitializeAsync().ConfigureAwait(true);
 
+            // 语言要在界面读数据之前定下来：偏好里的语言未必是默认语言，
+            // 而且切换会重刷资源字典，晚一步界面就先按默认语言渲染了一遍。
+            await ApplyLanguage(services).ConfigureAwait(true);
+
             // 写入内置技能，须在界面读取工具之前完成
             await services.GetRequiredService<ISkillService>().InitializeAsync().ConfigureAwait(true);
 
@@ -132,6 +175,24 @@ public partial class App : Application
             // 启动阶段的异常无处上报，写到日志文件里便于排查
             TryWriteStartupLog(services, ex);
         }
+    }
+
+    /// <summary>
+    /// 按偏好设置决定界面语言，并让之后的每次切换都重刷资源字典。
+    /// </summary>
+    private static async Task ApplyLanguage(IServiceProvider services)
+    {
+        var localization = services.GetRequiredService<ILocalizationService>();
+
+        // 只注册一次：App 存活期间这个委托一直有效，不必担心重复订阅
+        localization.LanguageChanged += (_, _) => LocalizedResources.Apply(localization);
+
+        var preferences = await services.GetRequiredService<IConfigService>()
+            .GetPreferencesAsync().ConfigureAwait(true);
+
+        // 与当前语言相同时 SetLanguage 会直接返回，不会触发事件，所以补一次 Apply
+        localization.SetLanguage(preferences.Language);
+        LocalizedResources.Apply(localization);
     }
 
     private static void TryWriteStartupLog(IServiceProvider services, Exception exception)
@@ -205,7 +266,7 @@ public partial class App : Application
         window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
     }
 
-    private static void ApplyTheme(string theme)
+    private static void ApplyTheme(Window window, string theme)
     {
         if (Current is null)
         {
@@ -218,5 +279,37 @@ public partial class App : Application
             "Dark" => ThemeVariant.Dark,
             _ => ThemeVariant.Default,
         };
+
+        // 主题切换会让资源字典里的画刷换色，窗口底色用的是资源里的画刷（直接赋值了本地值），
+        // 必须跟着重设一遍，否则关掉模糊时是上一个主题的旧色。
+        ApplyWindowBlur(window, _windowBlurMode);
+    }
+
+    /// <summary>当前生效的模糊模式，供主题切换时重设窗口底色。</summary>
+    private static string _windowBlurMode = "Off";
+
+    /// <summary>
+    /// 按偏好设置主窗口的原生背景模糊。要点：
+    /// 1. 这里只描述"期望的层级"，操作系统按列表顺序挑第一个它支持的——
+    ///    选 Mica 在不支持的系统上会自动退回 AcrylicBlur、再退回 Blur。
+    /// 2. 默认的合成模式（WinUIComposition）下窗口表面始终支持逐像素透明，
+    ///    因此"关闭"不能靠空 hint 实现——空 hint 只是没有系统背板，半透明的窗口底色照样透出桌面。
+    ///    所以关闭时把窗口底色绑到不透明的 AppBackground，开启时绑到半透明的 WindowTint 让背板透出来。
+    /// 3. 用 Bind + DynamicResourceExtension 而非直接取值：XAML 加载器会按"有效主题"解析
+    ///    （含 RequestedThemeVariant=Default 时跟随系统），且主题切换时自动换色，无需在 ApplyTheme 里手动重设。
+    /// </summary>
+    private static void ApplyWindowBlur(Window window, string mode)
+    {
+        _windowBlurMode = mode;
+
+        window.TransparencyLevelHint = mode switch
+        {
+            "Mica" => [WindowTransparencyLevel.Mica, WindowTransparencyLevel.AcrylicBlur, WindowTransparencyLevel.Blur],
+            "AcrylicBlur" => [WindowTransparencyLevel.AcrylicBlur, WindowTransparencyLevel.Blur],
+            _ => [],
+        };
+
+        window.Bind(Avalonia.Controls.TopLevel.BackgroundProperty,
+            new DynamicResourceExtension(mode == "Off" ? "AppBackground" : "WindowTint"));
     }
 }
