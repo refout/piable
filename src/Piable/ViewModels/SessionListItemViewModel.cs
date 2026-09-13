@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Piable.Helpers;
 using Piable.Models;
 
 namespace Piable.ViewModels;
@@ -13,6 +14,8 @@ public sealed partial class SessionListItemViewModel : InlineConfirmViewModel
         MessageCount = summary.MessageCount;
         TotalTokens = summary.TotalTokens;
         AgentName = agentName;
+        UpdatedAt = summary.UpdatedAt;
+        MatchCount = summary.MatchCount;
     }
 
     public string Id { get; }
@@ -29,7 +32,20 @@ public sealed partial class SessionListItemViewModel : InlineConfirmViewModel
     [ObservableProperty]
     private string _agentName;
 
-    /// <summary>列表项第二行：<c>💬 12条 · 🔢 2.3K tokens · 🤖 通用助手</c>。</summary>
+    /// <summary>会话更新时间。搜索结束后恢复列表时用它排序，避免打乱原有的时间顺序。</summary>
+    public DateTimeOffset UpdatedAt { get; private set; }
+
+    /// <summary>搜索命中的消息条数。0 表示这次不是搜索结果（或只命中标题）。</summary>
+    [ObservableProperty]
+    private int _matchCount;
+
+    /// <summary>是否为搜索结果。</summary>
+    public bool IsSearchHit => IsSearching && MatchCount > 0;
+
+    /// <summary>当前是否处于搜索态。由主窗口设置，同一时刻对所有行一致。</summary>
+    public bool IsSearching { get; set; }
+
+    /// <summary>列表项第二行：<c>12条 · 2.3K tokens · 通用助手</c>。</summary>
     public string SummaryText
     {
         get
@@ -38,7 +54,13 @@ public sealed partial class SessionListItemViewModel : InlineConfirmViewModel
                 ? TotalTokens.ToString()
                 : (TotalTokens / 1000d).ToString("0.#") + "K";
 
-            return $"💬 {MessageCount}条 · 🔢 {tokens} tokens · 🤖 {AgentName}";
+            // 搜索态下把"命中几条"放在最前：这是用户判断要不要点开的唯一依据，
+            // 而消息总数与 token 数在找东西时毫无参考价值。
+            var head = IsSearchHit
+                ? Loc.Get("Session.HitCount", MatchCount)
+                : Loc.Get("Session.MessageCount", MessageCount);
+
+            return $"{head}{tokens} tokens · {AgentName}";
         }
     }
 
@@ -49,6 +71,7 @@ public sealed partial class SessionListItemViewModel : InlineConfirmViewModel
         MessageCount = summary.MessageCount;
         TotalTokens = summary.TotalTokens;
         AgentName = agentName;
+        UpdatedAt = summary.UpdatedAt;
         OnPropertyChanged(nameof(SummaryText));
     }
 

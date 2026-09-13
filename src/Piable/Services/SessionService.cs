@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Piable.Helpers;
 using Piable.Models;
 using Piable.Services.Storage;
 
@@ -9,6 +10,10 @@ public interface ISessionService
 {
     /// <summary>读取最近的会话摘要，用于侧边栏列表（不含消息正文）。</summary>
     Task<IReadOnlyList<ChatSessionSummary>> GetRecentAsync(int limit = 20, CancellationToken ct = default);
+
+    /// <summary>按关键词搜索会话（标题或消息正文命中）。关键词为空白时返回空列表。</summary>
+    Task<IReadOnlyList<ChatSessionSummary>> SearchAsync(
+        string keyword, int limit = 50, CancellationToken ct = default);
 
     /// <summary>加载会话及其全部消息。</summary>
     Task<ChatSession?> LoadAsync(string id, CancellationToken ct = default);
@@ -47,6 +52,19 @@ public sealed class SessionService : ISessionService
     {
         var summaries = await _repository.GetSummariesAsync(limit, ct).ConfigureAwait(false);
         return summaries;
+    }
+
+    public async Task<IReadOnlyList<ChatSessionSummary>> SearchAsync(
+        string keyword, int limit = 50, CancellationToken ct = default)
+    {
+        // 空白关键词直接返回空：LIKE '%%' 会把所有有消息的会话都捞出来，
+        // 看上去像"搜索什么都搜得到"，实际上等于没搜索。
+        if (string.IsNullOrWhiteSpace(keyword))
+        {
+            return [];
+        }
+
+        return await _repository.SearchAsync(keyword.Trim(), limit, ct).ConfigureAwait(false);
     }
 
     public Task<ChatSession?> LoadAsync(string id, CancellationToken ct = default) =>
@@ -98,10 +116,10 @@ public sealed class SessionService : ISessionService
 
         builder.Append("# ").AppendLine(session.Title);
         builder.AppendLine();
-        builder.Append("- 智能体：").AppendLine(agent?.Name ?? session.AgentId ?? "（已删除）");
-        builder.Append("- 模型：").AppendLine(session.ModelUsed ?? "—");
-        builder.Append("- 创建时间：").AppendLine(session.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
-        builder.Append("- 消息数：").AppendLine(session.Messages.Count.ToString());
+        builder.Append(Loc.Get("Export.Agent")).AppendLine(agent?.Name ?? session.AgentId ?? Loc.Get("Common.DeletedParen"));
+        builder.Append(Loc.Get("Export.Model")).AppendLine(session.ModelUsed ?? "—");
+        builder.Append(Loc.Get("Export.CreatedAt")).AppendLine(session.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
+        builder.Append(Loc.Get("Export.MessageCount")).AppendLine(session.Messages.Count.ToString());
         builder.AppendLine();
         builder.AppendLine("---");
         builder.AppendLine();
@@ -127,10 +145,10 @@ public sealed class SessionService : ISessionService
 
     private static string DescribeRole(MessageRole role) => role switch
     {
-        MessageRole.User => "用户",
-        MessageRole.Assistant => "助手",
-        MessageRole.System => "系统",
-        MessageRole.Tool => "工具",
+        MessageRole.User => Loc.Get("Export.RoleUser"),
+        MessageRole.Assistant => Loc.Get("Export.RoleAssistant"),
+        MessageRole.System => Loc.Get("Export.RoleSystem"),
+        MessageRole.Tool => Loc.Get("Export.RoleTool"),
         _ => role.ToString(),
     };
 

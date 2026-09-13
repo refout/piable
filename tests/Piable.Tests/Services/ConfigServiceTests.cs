@@ -115,8 +115,9 @@ public class ConfigServiceTests
         var provider = await service.GetOrCreateProviderAsync(ProviderPresets.DeepSeek);
 
         Assert.Equal("https://api.deepseek.com/v1", provider.Endpoint);
-        Assert.Equal("deepseek-chat", provider.DefaultModel);
-        Assert.Contains("deepseek-chat", provider.Models);
+        // DeepSeek 不预置模型列表，新建时为空，靠"获取模型列表"拉取
+        Assert.Equal(string.Empty, provider.DefaultModel);
+        Assert.Empty(provider.Models);
         Assert.True(provider.InputPricePer1K > 0);
     }
 

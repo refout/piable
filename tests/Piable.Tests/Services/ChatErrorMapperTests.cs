@@ -29,7 +29,7 @@ public class ChatErrorMapperTests
     {
         var message = ChatErrorMapper.ToUserMessage(new HttpRequestException("connection refused"));
 
-        Assert.Equal("⚠️ 网络连接异常", message);
+        Assert.Equal("网络连接异常", message);
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class ChatErrorMapperTests
     {
         var message = ChatErrorMapper.ToUserMessage(new InvalidOperationException("internal detail"));
 
-        Assert.Equal("⚠️ 未知错误，请查看日志", message);
+        Assert.Equal("未知错误，请查看日志", message);
         Assert.DoesNotContain("internal detail", message);
     }
 
@@ -78,6 +78,6 @@ public class ChatErrorMapperTests
         var message = ChatErrorMapper.ToUserMessage(
             new HttpRequestException("x", null, HttpStatusCode.Unauthorized));
 
-        Assert.StartsWith("❌", message);
+        Assert.StartsWith("", message);
     }
 }

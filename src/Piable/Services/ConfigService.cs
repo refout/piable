@@ -130,8 +130,20 @@ public sealed class ConfigService : IConfigService
         }
     }
 
-    public Task DeleteProviderAsync(string id, CancellationToken ct = default) =>
-        _providers.DeleteAsync(id, ct);
+    public async Task DeleteProviderAsync(string id, CancellationToken ct = default)
+    {
+        await _providers.DeleteAsync(id, ct).ConfigureAwait(false);
+
+        // 与 SaveProviderAsync 同理：删掉的若是默认项，必须另立一个默认，
+        // 否则用户发起对话时会莫名其妙地没有可用配置。
+        // 会话不会跟着消失——Sessions.ProviderId 是 ON DELETE SET NULL。
+        var all = await _providers.GetAllAsync(ct).ConfigureAwait(false);
+        if (all.Count > 0 && all.TrueForAll(p => !p.IsDefault))
+        {
+            all[0].IsDefault = true;
+            await _providers.UpsertAsync(all[0], ct).ConfigureAwait(false);
+        }
+    }
 
     // ---------------- 智能体 ----------------
 

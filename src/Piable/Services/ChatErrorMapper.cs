@@ -1,6 +1,7 @@
 using System.ClientModel;
 using System.Net;
 using System.Text.Json;
+using Piable.Helpers;
 
 namespace Piable.Services;
 
@@ -27,7 +28,7 @@ public static class ChatErrorMapper
         if (exception is OperationCanceledException or TaskCanceledException)
         {
             return IsTimeout(exception)
-                ? "⏰ 请求超时，请检查网络"
+                ? Loc.Get("Error.Timeout")
                 : null;
         }
 
@@ -35,26 +36,26 @@ public static class ChatErrorMapper
         {
             ClientResultException client => FromStatusCode(client.Status),
             HttpRequestException http => FromHttpException(http),
-            TimeoutException => "⏰ 请求超时，请检查网络",
-            JsonException => "⚠️ 数据解析错误，请检查 API 响应",
-            _ => "⚠️ 未知错误，请查看日志",
+            TimeoutException => Loc.Get("Error.Timeout"),
+            JsonException => Loc.Get("Error.Parse"),
+            _ => Loc.Get("Error.Unknown"),
         };
     }
 
     private static string FromHttpException(HttpRequestException exception) =>
         exception.StatusCode is { } status
             ? FromStatusCode((int)status)
-            : "⚠️ 网络连接异常";
+            : Loc.Get("Error.Network");
 
     private static string FromStatusCode(int status) => status switch
     {
-        401 => "❌ 认证失败，请检查 API Key",
-        403 => "❌ 权限不足",
-        404 => "❌ 端点或模型不存在",
-        408 => "⏰ 请求超时，请检查网络",
-        429 => "⚠️ API 配额已用尽，请稍后重试",
-        >= 500 => "⚠️ 供应商服务异常，请稍后重试",
-        _ => "⚠️ 请求失败，请检查配置",
+        401 => Loc.Get("Error.Unauthorized"),
+        403 => Loc.Get("Error.Forbidden"),
+        404 => Loc.Get("Error.NotFound"),
+        408 => Loc.Get("Error.Timeout"),
+        429 => Loc.Get("Error.RateLimited"),
+        >= 500 => Loc.Get("Error.ServerError"),
+        _ => Loc.Get("Error.RequestFailed"),
     };
 
     /// <summary>

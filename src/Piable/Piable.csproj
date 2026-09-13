@@ -37,6 +37,19 @@
     <AvaloniaResource Include="Assets\**" />
   </ItemGroup>
 
+  <!--
+    语言包以嵌入资源打包，而不是作为散落的文件随程序发布：
+    单文件发布时不会有额外文件，也不依赖进程的工作目录。
+
+    WithCulture="false" 不可省：文件名里的 zh-CN / en-US 会被 MSBuild 的
+    AssignCulture 当成区域性后缀，把资源编进 zh-CN\Piable.resources.dll
+    这样的卫星程序集里，主程序集反而读不到——界面上就是一片 Loc.xxx。
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\Strings.zh-CN.json" LogicalName="Piable.Resources.Strings.zh-CN.json" WithCulture="false" />
+    <EmbeddedResource Include="Resources\Strings.en-US.json" LogicalName="Piable.Resources.Strings.en-US.json" WithCulture="false" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.2" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
@@ -48,7 +61,9 @@
     </PackageReference>
     <PackageReference Include="Azure.AI.OpenAI" Version="2.1.0" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="FluentIcons.Avalonia" Version="2.1.341" />
     <PackageReference Include="LiveMarkdown.Avalonia" Version="2.4.0" />
+    <PackageReference Include="LiveMarkdown.Avalonia.Mermaid" Version="2.4.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.10.0" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.0" />
@@ -59,6 +74,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Piable.Tests" />
   </ItemGroup>
+
 
   <!--
     剔除第三方原生库附带的调试符号。SkiaSharp / HarfBuzz 的 .pdb 合计上百 MB，

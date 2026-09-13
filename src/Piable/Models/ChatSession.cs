@@ -55,4 +55,10 @@ public sealed class ChatSessionSummary
     public long TotalTokens { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+
+    /// <summary>
+    /// 搜索时命中关键词的消息条数。仅由搜索查询填充，普通列表查询下为 0。
+    /// 与会话自己的消息总数区分开：命中 3 条 / 共 40 条，比只给一个数字更好判断值不值得点开。
+    /// </summary>
+    public int MatchCount { get; set; }
 }

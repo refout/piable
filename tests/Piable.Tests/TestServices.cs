@@ -19,6 +19,7 @@ internal sealed class TestServices
         SessionService sessions,
         SkillService skills,
         ToolCatalog tools,
+        AgentResourceService resources,
         AgentOrchestrator orchestrator,
         McpClientService mcp)
     {
@@ -26,6 +27,7 @@ internal sealed class TestServices
         Sessions = sessions;
         Skills = skills;
         Tools = tools;
+        Resources = resources;
         Orchestrator = orchestrator;
         Mcp = mcp;
         Calculator = new TokenCostCalculator();
@@ -38,6 +40,8 @@ internal sealed class TestServices
     public SkillService Skills { get; }
 
     public ToolCatalog Tools { get; }
+
+    public AgentResourceService Resources { get; }
 
     public TokenCostCalculator Calculator { get; }
 
@@ -52,9 +56,10 @@ internal sealed class TestServices
         var skills = new SkillService(workspace.Skills);
         var mcp = new McpClientService();
         var tools = new ToolCatalog(skills, mcp, config);
+        var resources = new AgentResourceService(mcp, config);
 
         return new TestServices(
-            config, new SessionService(workspace.Sessions), skills, tools,
+            config, new SessionService(workspace.Sessions), skills, tools, resources,
             new AgentOrchestrator(new ChatClientFactory()), mcp);
     }
 
@@ -73,6 +78,7 @@ internal sealed class TestServices
         new ModelListService(new HttpClient()),
         Skills,
         Tools,
+        Resources,
         Mcp);
 
     public ChatSessionViewModel CreateChatSessionViewModel(
@@ -81,5 +87,6 @@ internal sealed class TestServices
         ProviderConfig? provider,
         UserPreferences preferences,
         IStatusReporter status) =>
-        new(session, agents, provider, Sessions, Orchestrator, Tools, Calculator, preferences, status);
+        new(session, agents, provider, Sessions, Orchestrator, Tools, Resources,
+            Calculator, preferences, status);
 }
