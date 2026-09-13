@@ -63,15 +63,16 @@ public sealed class ProviderRepository
         command.Transaction = (SqliteTransaction)transaction;
         command.CommandText = """
             INSERT INTO Providers (
-                Id, PresetId, ApiKey, Endpoint, DeploymentName, Models, DefaultModel,
+                Id, PresetId, Name, ApiKey, Endpoint, DeploymentName, Models, DefaultModel,
                 Temperature, MaxTokens, TopP, InputPricePer1K, OutputPricePer1K,
                 IsDefault, ModelListUpdatedAt, CreatedAt, UpdatedAt)
             VALUES (
-                $id, $presetId, $apiKey, $endpoint, $deploymentName, $models, $defaultModel,
+                $id, $presetId, $name, $apiKey, $endpoint, $deploymentName, $models, $defaultModel,
                 $temperature, $maxTokens, $topP, $inputPrice, $outputPrice,
                 $isDefault, $modelListUpdatedAt, $createdAt, $updatedAt)
             ON CONFLICT(Id) DO UPDATE SET
                 PresetId = excluded.PresetId,
+                Name = excluded.Name,
                 ApiKey = excluded.ApiKey,
                 Endpoint = excluded.Endpoint,
                 DeploymentName = excluded.DeploymentName,
@@ -89,6 +90,7 @@ public sealed class ProviderRepository
 
         command.AddParam("$id", provider.Id);
         command.AddParam("$presetId", provider.PresetId);
+        command.AddParam("$name", provider.Name);
         // 加密后才落库；Ollama 等无 Key 的供应商存 NULL
         command.AddParam("$apiKey", _protector.Protect(provider.ApiKey));
         command.AddParam("$endpoint", provider.Endpoint);
@@ -135,6 +137,7 @@ public sealed class ProviderRepository
         {
             Id = reader.ReadString("Id"),
             PresetId = reader.ReadString("PresetId"),
+            Name = reader.ReadString("Name"),
             // 解密失败（例如密钥文件被删）不抛异常，退化为空 Key，让用户在界面上重新填写
             ApiKey = _protector.TryUnprotect(storedKey),
             Endpoint = reader.ReadNullableString("Endpoint"),

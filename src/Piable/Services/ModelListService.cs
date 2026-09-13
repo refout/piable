@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
+using Piable.Helpers;
 using Piable.Models;
 
 namespace Piable.Services;
@@ -23,12 +24,12 @@ public sealed class ModelListService : IModelListService
         ProviderConfig provider, CancellationToken ct = default)
     {
         var preset = ProviderPresets.Find(provider.PresetId)
-            ?? throw new InvalidOperationException($"未知的供应商预设：{provider.PresetId}");
+            ?? throw new InvalidOperationException(Loc.Get("Provider.UnknownPreset", provider.PresetId));
 
         if (!preset.SupportsModelFetch)
         {
             throw new InvalidOperationException(
-                $"{preset.DisplayName} 不支持自动获取模型列表，请手动添加模型。");
+                Loc.Get("Provider.NoModelFetch", preset.DisplayName));
         }
 
         var url = BuildUrl(provider, preset);

@@ -10,8 +10,14 @@ public sealed class ProviderConfig
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("n");
 
-    /// <summary>关联的内置供应商预设 ID。</summary>
+    /// <summary>关联的内置供应商预设 ID；自定义供应商使用 <see cref="ProviderPresets.Custom"/>。</summary>
     public string PresetId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 供应商在界面上的名字。自定义供应商由用户填写（如「公司网关」「本地 vLLM」）；
+    /// 内置预设留空，显示时用预设自己的名字。
+    /// </summary>
+    public string Name { get; set; } = string.Empty;
 
     /// <summary>明文 API Key；Ollama 等本地供应商可为 null。</summary>
     public string? ApiKey { get; set; }
@@ -43,6 +49,20 @@ public sealed class ProviderConfig
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.Now;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.Now;
+
+    /// <summary>
+    /// 界面上显示的名字：自定义供应商用自己的 <see cref="Name"/>，
+    /// 内置预设用预设名；两者都没有时退回预设 ID，至少不让界面出现空白。
+    /// </summary>
+    [JsonIgnore]
+    public string DisplayName =>
+        !string.IsNullOrWhiteSpace(Name)
+            ? Name
+            : ProviderPresets.Find(PresetId)?.DisplayName ?? PresetId;
+
+    /// <summary>是否为用户自建的供应商（可改名、可删除）。</summary>
+    [JsonIgnore]
+    public bool IsCustom => ProviderPresets.IsCustom(PresetId);
 
     /// <summary>该配置是否已具备发起请求的最低条件。</summary>
     [JsonIgnore]

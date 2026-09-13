@@ -10,6 +10,35 @@ public static class ProviderPresets
     public const string Ollama = "ollama";
     public const string AzureOpenAi = "azure-openai";
 
+    /// <summary>
+    /// 自定义供应商共用的预设 ID。所有自建端点都记在这个 ID 下，
+    /// 彼此靠 <see cref="ProviderConfig.Id"/> 与 <see cref="ProviderConfig.Name"/> 区分。
+    /// </summary>
+    public const string Custom = "custom";
+
+    /// <summary>
+    /// 自定义供应商的模板。<b>刻意不放进 <see cref="All"/></b>：
+    /// All 是"界面上可选的内置预设清单"，而自定义不是一条预设，
+    /// 它可以在界面上被创建多条、各自命名。放进 All 反而会被当成"只能配一个"的预设。
+    /// </summary>
+    public static ProviderPreset CustomPreset { get; } = new()
+    {
+        Id = Custom,
+        DisplayName = "自定义",
+        ProviderType = ProviderType.OpenAICompatible,
+        // 端点由用户填写，没有有意义的默认值
+        DefaultEndpoint = string.Empty,
+        // 自建端点形形色色：本地的 LM Studio / vLLM 不需要 Key，自建网关要，
+        // 与其逼用户先猜一次，不如不强制——填了就带上，没填就匿名访问。
+        RequiresApiKey = false,
+        DefaultModels = [],
+        InputPricePer1K = 0m,
+        OutputPricePer1K = 0m,
+        // 凡是 OpenAI 兼容的服务基本都实现了 /models，值得一试
+        ModelsEndpoint = "/models",
+        ModelListFormat = ModelListFormat.OpenAi,
+    };
+
     /// <summary>全部内置预设，按界面展示顺序排列。</summary>
     public static IReadOnlyList<ProviderPreset> All { get; } =
     [
@@ -33,7 +62,8 @@ public static class ProviderPresets
             ProviderType = ProviderType.OpenAICompatible,
             DefaultEndpoint = "https://api.deepseek.com/v1",
             RequiresApiKey = true,
-            DefaultModels = ["deepseek-chat", "deepseek-reasoner"],
+            // DeepSeek 的模型一律通过 /v1/models 接口获取，不在这里写死兜底
+            DefaultModels = [],
             InputPricePer1K = 0.00027m,
             OutputPricePer1K = 0.0011m,
             ModelsEndpoint = "/models",
@@ -71,10 +101,26 @@ public static class ProviderPresets
     ];
 
     /// <summary>按 ID 查找预设；找不到返回 null（用户可能删除了预设对应的配置）。</summary>
-    public static ProviderPreset? Find(string? presetId) =>
-        string.IsNullOrWhiteSpace(presetId)
-            ? null
-            : All.FirstOrDefault(p => string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase));
+    public static ProviderPreset? Find(string? presetId)
+    {
+        if (string.IsNullOrWhiteSpace(presetId))
+        {
+            return null;
+        }
+
+        // 自定义不在 All 里，但仍要能被查到：
+        // 建客户端、拉模型列表、算价格全都靠它来判断协议与能力。
+        if (string.Equals(presetId, Custom, StringComparison.OrdinalIgnoreCase))
+        {
+            return CustomPreset;
+        }
+
+        return All.FirstOrDefault(p => string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>该预设 ID 是否代表自定义供应商（而非某个内置预设）。</summary>
+    public static bool IsCustom(string? presetId) =>
+        string.Equals(presetId, Custom, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>获取预设；找不到时抛出，用于调用方已确信预设存在的场景。</summary>
     public static ProviderPreset Get(string presetId) =>

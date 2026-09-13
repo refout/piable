@@ -2,6 +2,7 @@ using System.ClientModel;
 using Azure.AI.OpenAI;
 using Microsoft.Extensions.AI;
 using OpenAI;
+using Piable.Helpers;
 using Piable.Models;
 
 namespace Piable.Services;
@@ -32,7 +33,7 @@ public sealed class ChatClientFactory : IChatClientFactory
 
         if (string.IsNullOrWhiteSpace(endpoint))
         {
-            throw new InvalidOperationException("未配置 API 地址（Endpoint）。");
+            throw new InvalidOperationException(Loc.Get("Provider.NoEndpoint"));
         }
 
         return preset?.ProviderType == ProviderType.AzureOpenAI
@@ -88,7 +89,7 @@ public sealed class ChatClientFactory : IChatClientFactory
     {
         if (string.IsNullOrWhiteSpace(provider.ApiKey))
         {
-            throw new InvalidOperationException("Azure OpenAI 必须填写 API Key。");
+            throw new InvalidOperationException(Loc.Get("Provider.AzureKeyRequired"));
         }
 
         // Azure 以部署名寻址；用户没单独填部署名时按模型名处理
