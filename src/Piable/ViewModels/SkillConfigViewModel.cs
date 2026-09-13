@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Piable.Helpers;
 using Piable.Models;
 using Piable.Services;
 using Piable.Services.Tools;
@@ -43,6 +44,10 @@ public sealed partial class SkillConfigViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isStatusError;
 
+    /// <summary>正在保存技能。写库并重新加载列表期间禁用保存按钮并显示转圈。</summary>
+    [ObservableProperty]
+    private bool _isBusy;
+
     public SkillConfigViewModel(ISkillService skills, IStatusReporter status)
     {
         _skills = skills;
@@ -60,8 +65,8 @@ public sealed partial class SkillConfigViewModel : ViewModelBase
     public bool IsHandlerDangerous => SelectedHandler?.Risk == ToolRisk.Dangerous;
 
     public string HandlerRiskHint => IsHandlerDangerous
-        ? "⚠️ 该实现会修改本机状态。关联到智能体后，还需在智能体设置里单独开启「允许执行危险工具」才会真正执行。"
-        : "该实现无副作用，关联到智能体后即可直接调用。";
+        ? Loc.Get("Skill.RiskDangerousHint")
+        : Loc.Get("Skill.RiskSafeHint");
 
     public async Task LoadAsync(CancellationToken ct = default)
     {
@@ -155,7 +160,7 @@ public sealed partial class SkillConfigViewModel : ViewModelBase
         ToolSpec = string.Empty;
         SelectedHandler = AvailableHandlers.FirstOrDefault();
         IsEnabled = true;
-        StatusMessage = "选择「本地实现」后填写名称即可保存";
+        StatusMessage = Loc.Get("Skill.FillToSave");
         IsStatusError = false;
     }
 
@@ -165,14 +170,14 @@ public sealed partial class SkillConfigViewModel : ViewModelBase
         if (SelectedHandler is null)
         {
             IsStatusError = true;
-            StatusMessage = "⚠️ 请先选择一个本地实现";
+            StatusMessage = Loc.Get("Skill.HandlerRequired");
             return;
         }
 
         if (string.IsNullOrWhiteSpace(Name))
         {
             IsStatusError = true;
-            StatusMessage = "⚠️ 名称不能为空";
+            StatusMessage = Loc.Get("Common.NameRequired");
             return;
         }
 
@@ -184,28 +189,32 @@ public sealed partial class SkillConfigViewModel : ViewModelBase
         skill.Handler = SelectedHandler.Key;
         skill.Enabled = IsEnabled;
 
+        IsBusy = true;
         try
         {
             await _skills.SaveAsync(skill).ConfigureAwait(true);
         }
         catch (ArgumentException ex)
         {
+            IsBusy = false;
             IsStatusError = true;
-            StatusMessage = $"⚠️ {ex.Message}";
+            StatusMessage = ex.Message;
             return;
         }
         catch (Exception ex)
         {
             // 写库失败等意外情况同样要反馈，不能被 AsyncRelayCommand 静默吞掉
+            IsBusy = false;
             IsStatusError = true;
-            StatusMessage = $"⚠️ 保存失败：{ChatErrorMapper.ToUserMessage(ex) ?? ex.Message}";
+            StatusMessage = Loc.Get("Mcp.SaveFailed", ChatErrorMapper.ToUserMessage(ex) ?? ex.Message);
             _status.ReportError(StatusMessage);
             return;
         }
 
+        IsBusy = false;
         IsStatusError = false;
-        StatusMessage = "✅ 已保存";
-        _status.ReportSuccess($"技能「{skill.Name}」已保存");
+        StatusMessage = Loc.Get("Common.Saved");
+        _status.ReportSuccess(Loc.Get("Skill.Saved", skill.Name));
 
         await LoadAsync().ConfigureAwait(true);
         SelectedSkill = Skills.FirstOrDefault(s => s.Id == skill.Id);
@@ -215,6 +224,6 @@ public sealed partial class SkillConfigViewModel : ViewModelBase
     {
         await _skills.DeleteAsync(id).ConfigureAwait(true);
         await LoadAsync().ConfigureAwait(true);
-        _status.ReportSuccess("技能已删除");
+        _status.ReportSuccess(Loc.Get("Skill.Deleted"));
     }
 }

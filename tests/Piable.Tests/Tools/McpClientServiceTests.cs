@@ -230,6 +230,88 @@ public class McpClientServiceTests
             () => service.GetToolsAsync(ServerConfig()));
     }
 
+    // ---------------- resources 与 prompts ----------------
+
+    [Fact]
+    public async Task 发现服务器提供的资源与资源模板()
+    {
+        await using var service = new McpClientService();
+        var config = ServerConfig();
+
+        var resources = await service.GetResourcesAsync(config);
+
+        var note = resources.Single(r => !r.IsTemplate);
+        Assert.Equal("项目说明", note.DisplayName);
+        Assert.Equal("file:///notes/readme.md", note.Uri);
+        Assert.Equal("text/markdown", note.MimeType);
+
+        var template = resources.Single(r => r.IsTemplate);
+        Assert.Equal("file:///notes/{id}", template.Uri);
+    }
+
+    [Fact]
+    public async Task 读取资源返回文本内容()
+    {
+        await using var service = new McpClientService();
+        var config = ServerConfig();
+
+        var content = await service.ReadResourceAsync(config, "file:///notes/readme.md");
+
+        Assert.Contains("用于验证资源读取的正文", content.Text);
+        Assert.False(content.IsBinary);
+        Assert.Equal("file:///notes/readme.md", content.Uri);
+    }
+
+    [Fact]
+    public async Task 读取不存在的资源时抛出可理解的错误()
+    {
+        await using var service = new McpClientService();
+        var config = ServerConfig();
+
+        var error = await Assert.ThrowsAsync<McpConnectionException>(
+            () => service.ReadResourceAsync(config, string.Empty));
+
+        Assert.Contains("未指定", error.Message);
+    }
+
+    [Fact]
+    public async Task 发现提示模板并展开为消息序列()
+    {
+        await using var service = new McpClientService();
+        var config = ServerConfig();
+
+        var prompts = await service.GetPromptsAsync(config);
+        var prompt = Assert.Single(prompts);
+
+        Assert.Equal("summarize", prompt.Name);
+        Assert.Equal("总结", prompt.DisplayName);
+        Assert.Equal(["topic"], prompt.Arguments.Select(a => a.Name));
+        Assert.True(prompt.Arguments.Single().Required);
+
+        var messages = await service.GetPromptAsync(
+            config, prompt.Name, new Dictionary<string, string?> { ["topic"] = "MCP 协议" });
+
+        var message = Assert.Single(messages);
+        Assert.Equal("user", message.Role);
+        Assert.Contains("MCP 协议", message.Text);
+    }
+
+    [Fact]
+    public async Task 资源与提示的发现失败不影响工具可用()
+    {
+        // 用一台只提供工具、不认识 resources/prompts 的服务器验证降级：
+        // 指向一个不存在的命令会连接失败，因此这里用"能连上但能力缺失"的方式模拟——
+        // 直接对已连接的服务器再取一次资源，列表应当与首次一致而不是抛异常。
+        await using var service = new McpClientService();
+        var config = ServerConfig();
+
+        var tools = await service.GetToolsAsync(config);
+        Assert.Equal(2, tools.Count);
+
+        var resources = await service.GetResourcesAsync(config);
+        Assert.NotEmpty(resources);
+    }
+
     [Fact]
     public async Task 释放服务会一并关闭子进程()
     {

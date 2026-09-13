@@ -1,3 +1,4 @@
+using Piable.Helpers;
 using Piable.Models;
 using Piable.Services.Storage;
 
@@ -75,14 +76,13 @@ public sealed class SkillService : ISkillService
         if (!ToolNaming.IsValid(skill.ToolName))
         {
             throw new ArgumentException(
-                $"工具名「{skill.ToolName}」不合法：只允许字母、数字、下划线和连字符，"
-                + $"必须以字母开头，长度 1-{ToolNaming.MaxLength}。",
+                Loc.Get("Skill.InvalidToolName", skill.ToolName, ToolNaming.MaxLength),
                 nameof(skill));
         }
 
         if (_handlers.All(h => !string.Equals(h.Key, skill.Handler, StringComparison.OrdinalIgnoreCase)))
         {
-            throw new ArgumentException($"未知的技能处理器「{skill.Handler}」。", nameof(skill));
+            throw new ArgumentException(Loc.Get("Skill.UnknownHandlerKey", skill.Handler), nameof(skill));
         }
 
         skill.UpdatedAt = DateTimeOffset.Now;
@@ -113,7 +113,7 @@ public sealed class SkillService : ISkillService
                 Name = skill.ToolName,
                 Source = ToolSource.Skill,
                 Risk = handler.Risk,
-                SourceLabel = $"技能 · {skill.Name}",
+                SourceLabel = Loc.Get("Tool.SourceLabel", skill.Name),
                 Description = skill.Description,
                 // 展示名用技能名称（通常是中文），工具名才是给模型看的函数名
                 OriginalName = skill.Name,

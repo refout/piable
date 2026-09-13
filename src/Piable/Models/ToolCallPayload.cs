@@ -40,4 +40,7 @@ public enum ToolInvocationStatusPayload
     Succeeded,
     Failed,
     Denied,
+
+    /// <summary>用户在逐次确认中拒绝执行。</summary>
+    Declined,
 }

@@ -1,6 +1,10 @@
 using System.Collections.ObjectModel;
+using System.Text;
+using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.AI;
+using Piable.Helpers;
 using Piable.Models;
 using Piable.Services;
 using Piable.Services.Tools;
@@ -32,11 +36,15 @@ public sealed partial class McpServerListItemViewModel : InlineConfirmViewModel
     [ObservableProperty]
     private bool _isEnabled;
 
-    public string DisplayName => $"{(IsEnabled ? "🟢" : "⚪")} {Name}";
+    /// <summary>启用状态由界面图标（CheckmarkCircle/Circle）表达，名字单独成串。</summary>
+    public string DisplayName => Name;
+
+    /// <summary>禁用态，供界面显示灰色圆点图标。</summary>
+    public bool IsDisabled => !IsEnabled;
 
     public string Subtitle => Transport switch
     {
-        McpTransport.Stdio => "Stdio（本地子进程）",
+        McpTransport.Stdio => Loc.Get("Mcp.TransportStdio"),
         McpTransport.Sse => "SSE",
         _ => "Streamable HTTP",
     };
@@ -49,6 +57,181 @@ public sealed partial class McpServerListItemViewModel : InlineConfirmViewModel
         OnPropertyChanged(nameof(DisplayName));
         OnPropertyChanged(nameof(Subtitle));
     }
+}
+
+/// <summary>工具浏览列表中的一项。</summary>
+public sealed partial class McpToolItemViewModel : ViewModelBase
+{
+    public McpToolItemViewModel(ToolDescriptor tool)
+    {
+        Name = tool.Name;
+        DisplayName = string.IsNullOrWhiteSpace(tool.OriginalName) ? tool.Name : tool.OriginalName!;
+        ShowBothNames = !string.IsNullOrWhiteSpace(tool.OriginalName)
+                        && !string.Equals(tool.OriginalName, tool.Name, StringComparison.Ordinal);
+        Description = tool.Description;
+        IsDangerous = tool.Risk == ToolRisk.Dangerous;
+
+        var schema = (tool.Tool as AIFunction)?.JsonSchema;
+        SchemaText = schema is null ? string.Empty : Prettify(schema.Value);
+        ParameterSummary = schema is null ? Loc.Get("Mcp.NoParameterInfo") : DescribeParameters(schema.Value);
+    }
+
+    /// <summary>模型实际调用时使用的名字。</summary>
+    public string Name { get; }
+
+    /// <summary>给人看的名字（MCP 服务端上的原始名）。</summary>
+    public string DisplayName { get; }
+
+    /// <summary>两个名字不一致时（加了来源前缀）才需要同时显示，否则是重复信息。</summary>
+    public bool ShowBothNames { get; }
+
+    public string? Description { get; }
+
+    public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
+
+    public bool IsDangerous { get; }
+
+    public string RiskLabel => IsDangerous ? Loc.Get("Mcp.RiskDangerous") : Loc.Get("Mcp.RiskReadOnly");
+
+    /// <summary>参数概览，如 <c>path*：string、recursive：boolean</c>。</summary>
+    public string ParameterSummary { get; }
+
+    /// <summary>完整参数 Schema（缩进后的 JSON）。</summary>
+    public string SchemaText { get; }
+
+    public bool HasSchema => SchemaText.Length > 0;
+
+    private static string DescribeParameters(JsonElement schema)
+    {
+        if (schema.ValueKind != JsonValueKind.Object
+            || !schema.TryGetProperty("properties", out var properties)
+            || properties.ValueKind != JsonValueKind.Object)
+        {
+            return Loc.Get("Common.NoParameters");
+        }
+
+        var required = new HashSet<string>(StringComparer.Ordinal);
+        if (schema.TryGetProperty("required", out var requiredArray)
+            && requiredArray.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in requiredArray.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                {
+                    required.Add(item.GetString()!);
+                }
+            }
+        }
+
+        var parts = new List<string>();
+        foreach (var property in properties.EnumerateObject())
+        {
+            var type = property.Value.ValueKind == JsonValueKind.Object
+                       && property.Value.TryGetProperty("type", out var typeElement)
+                       && typeElement.ValueKind == JsonValueKind.String
+                ? typeElement.GetString()
+                : "any";
+
+            parts.Add(required.Contains(property.Name)
+                ? Loc.Get("Common.ParamEntryRequired", property.Name, type)
+                : Loc.Get("Common.ParamEntry", property.Name, type));
+        }
+
+        return parts.Count == 0
+            ? Loc.Get("Common.NoParameters")
+            : string.Join(Loc.Get("Common.ListSeparator"), parts);
+    }
+
+    /// <summary>把 Schema 缩进后输出。用 Utf8JsonWriter 而不是序列化器，避免触发反射路径。</summary>
+    private static string Prettify(JsonElement element)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+        {
+            element.WriteTo(writer);
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+}
+
+/// <summary>资源浏览列表中的一项。</summary>
+public sealed partial class McpResourceItemViewModel : ViewModelBase
+{
+    public McpResourceItemViewModel(McpResourceDescriptor resource)
+    {
+        Uri = resource.Uri;
+        Name = resource.DisplayName;
+        Subtitle = string.IsNullOrWhiteSpace(resource.MimeType)
+            ? resource.Uri
+            : $"{resource.MimeType} · {resource.Uri}";
+        Description = resource.Description;
+        IsTemplate = resource.IsTemplate;
+    }
+
+    public string Uri { get; }
+
+    public string Name { get; }
+
+    public string Subtitle { get; }
+
+    public string? Description { get; }
+
+    /// <summary>模板的 URI 带占位符，读不出来，界面上要标清楚。</summary>
+    public bool IsTemplate { get; }
+
+    public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
+}
+
+/// <summary>提示模板列表中的一项。</summary>
+public sealed partial class McpPromptItemViewModel : ViewModelBase
+{
+    public McpPromptItemViewModel(McpPromptDescriptor prompt)
+    {
+        Name = prompt.Name;
+        DisplayName = prompt.DisplayName;
+        Description = prompt.Description;
+        Arguments = [.. prompt.Arguments.Select(a => new PromptArgumentInput(
+            a.Name, a.Description, a.Required))];
+    }
+
+    public string Name { get; }
+
+    public string DisplayName { get; }
+
+    public string? Description { get; }
+
+    public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
+
+    /// <summary>参数输入框。每个模板各自持有一份，切换模板时不会被串。</summary>
+    public List<PromptArgumentInput> Arguments { get; }
+
+    public string ArgumentSummary => Arguments.Count == 0
+        ? Loc.Get("Common.NoParameters")
+        : string.Join(Loc.Get("Common.ListSeparator"),
+            Arguments.Select(a => a.Required ? $"{a.Name}*" : a.Name));
+}
+
+/// <summary>提示模板的一个参数输入框。</summary>
+public sealed partial class PromptArgumentInput : ViewModelBase
+{
+    public PromptArgumentInput(string name, string? description, bool required)
+    {
+        Name = name;
+        Description = description;
+        Required = required;
+    }
+
+    public string Name { get; }
+
+    public string? Description { get; }
+
+    public bool Required { get; }
+
+    public string Label => Required ? $"{Name} *" : Name;
+
+    [ObservableProperty]
+    private string _value = string.Empty;
 }
 
 /// <summary>「配置 → MCP 服务器」标签页。</summary>
@@ -95,6 +278,28 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isStatusError;
 
+    /// <summary>工具浏览：当前选中的工具。</summary>
+    [ObservableProperty]
+    private McpToolItemViewModel? _selectedTool;
+
+    /// <summary>资源浏览：当前选中的资源。</summary>
+    [ObservableProperty]
+    private McpResourceItemViewModel? _selectedResource;
+
+    /// <summary>资源内容。只读展示，用户自行复制。</summary>
+    [ObservableProperty]
+    private string _resourceContentText = string.Empty;
+
+    /// <summary>提示浏览：当前选中的提示模板。</summary>
+    [ObservableProperty]
+    private McpPromptItemViewModel? _selectedPrompt;
+
+    [ObservableProperty]
+    private string _promptResultText = string.Empty;
+
+    [ObservableProperty]
+    private bool _isBrowsing;
+
     public McpServerConfigViewModel(
         IConfigService config, IStatusReporter status, IMcpClientService? mcp = null)
     {
@@ -104,6 +309,24 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
     }
 
     public ObservableCollection<McpServerListItemViewModel> Servers { get; } = [];
+
+    /// <summary>当前服务器提供的工具。点"读取工具"才拉取。</summary>
+    public ObservableCollection<McpToolItemViewModel> Tools { get; } = [];
+
+    /// <summary>当前服务器提供的资源。点"读取资源"才拉取。</summary>
+    public ObservableCollection<McpResourceItemViewModel> Resources { get; } = [];
+
+    /// <summary>当前服务器提供的提示模板。点"读取提示"才拉取。</summary>
+    public ObservableCollection<McpPromptItemViewModel> Prompts { get; } = [];
+
+    public bool HasTools => Tools.Count > 0;
+
+    public bool HasResources => Resources.Count > 0;
+
+    public bool HasPrompts => Prompts.Count > 0;
+
+    /// <summary>提示模板的参数输入区，随选中的模板重建。</summary>
+    public ObservableCollection<PromptArgumentInput> PromptArguments { get; } = [];
 
     public IReadOnlyList<McpTransport> AvailableTransports { get; } =
         [McpTransport.Stdio, McpTransport.Sse, McpTransport.StreamableHttp];
@@ -133,6 +356,9 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
     {
         OnPropertyChanged(nameof(HasSelection));
 
+        // 换了服务器，上一次浏览出来的资源与提示属于别的服务器，必须一并清掉
+        ClearBrowsedContent();
+
         if (value is null)
         {
             _editing = null;
@@ -140,6 +366,39 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
         }
 
         _ = LoadEditorAsync(value.Id);
+    }
+
+    private void ClearBrowsedContent()
+    {
+        Tools.Clear();
+        Resources.Clear();
+        Prompts.Clear();
+        PromptArguments.Clear();
+        SelectedTool = null;
+        SelectedResource = null;
+        SelectedPrompt = null;
+        ResourceContentText = string.Empty;
+        PromptResultText = string.Empty;
+
+        OnPropertyChanged(nameof(HasTools));
+        OnPropertyChanged(nameof(HasResources));
+        OnPropertyChanged(nameof(HasPrompts));
+    }
+
+    partial void OnSelectedPromptChanged(McpPromptItemViewModel? value)
+    {
+        PromptArguments.Clear();
+        PromptResultText = string.Empty;
+
+        if (value is null)
+        {
+            return;
+        }
+
+        foreach (var argument in value.Arguments)
+        {
+            PromptArguments.Add(argument);
+        }
     }
 
     partial void OnTransportChanged(McpTransport value)
@@ -189,7 +448,7 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
         _editing = null;
         SelectedServer = null;
 
-        Name = "新 MCP 服务器";
+        Name = Loc.Get("Mcp.NewName");
         Transport = McpTransport.Stdio;
         Command = string.Empty;
         ArgumentsText = string.Empty;
@@ -206,21 +465,21 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
         if (string.IsNullOrWhiteSpace(Name))
         {
             IsStatusError = true;
-            StatusMessage = "⚠️ 名称不能为空";
+            StatusMessage = Loc.Get("Common.NameRequired");
             return;
         }
 
         if (IsStdio && string.IsNullOrWhiteSpace(Command))
         {
             IsStatusError = true;
-            StatusMessage = "⚠️ Stdio 模式必须填写启动命令";
+            StatusMessage = Loc.Get("Mcp.StdioCommandRequired");
             return;
         }
 
         if (IsHttpTransport && string.IsNullOrWhiteSpace(Url))
         {
             IsStatusError = true;
-            StatusMessage = "⚠️ HTTP 模式必须填写 URL";
+            StatusMessage = Loc.Get("Mcp.HttpUrlRequired");
             return;
         }
 
@@ -233,6 +492,7 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
         server.Headers = IsHttpTransport ? ParseHeaders(HeadersText) : [];
         server.Enabled = IsEnabled;
 
+        IsBusy = true;
         try
         {
             await _config.SaveMcpServerAsync(server).ConfigureAwait(true);
@@ -245,15 +505,20 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
+            IsBusy = false;
             IsStatusError = true;
-            StatusMessage = $"⚠️ 保存失败：{ChatErrorMapper.ToUserMessage(ex) ?? ex.Message}";
+            StatusMessage = Loc.Get("Mcp.SaveFailed", ChatErrorMapper.ToUserMessage(ex) ?? ex.Message);
             _status.ReportError(StatusMessage);
             return;
         }
+        finally
+        {
+            IsBusy = false;
+        }
 
         IsStatusError = false;
-        StatusMessage = "✅ 已保存";
-        _status.ReportSuccess($"MCP 服务器「{server.Name}」已保存");
+        StatusMessage = Loc.Get("Common.Saved");
+        _status.ReportSuccess(Loc.Get("Mcp.Saved", server.Name));
 
         await LoadAsync().ConfigureAwait(true);
         SelectedServer = Servers.FirstOrDefault(s => s.Id == server.Id);
@@ -269,7 +534,7 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
 
         IsBusy = true;
         IsStatusError = false;
-        StatusMessage = "正在连接…";
+        StatusMessage = Loc.Get("Mcp.Connecting");
 
         var probe = _editing ?? new McpServerConfig();
         probe.Name = Name.Trim();
@@ -289,8 +554,9 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
                 var tools = await _mcp.GetToolsAsync(probe).ConfigureAwait(true);
                 IsStatusError = false;
                 StatusMessage = tools.Count == 0
-                    ? "✅ 连接成功，但该服务器未提供任何工具"
-                    : $"✅ 连接成功，发现 {tools.Count} 个工具：{string.Join("、", tools.Select(t => t.OriginalName))}";
+                    ? Loc.Get("Mcp.ConnectedNoTools")
+                    : Loc.Get("Mcp.ConnectedToolsFound", tools.Count,
+                        string.Join(Loc.Get("Common.ListSeparator"), tools.Select(t => t.OriginalName)));
             }
             finally
             {
@@ -301,16 +567,281 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
         catch (McpConnectionException ex)
         {
             IsStatusError = true;
-            StatusMessage = $"⚠️ {ex.Message}";
+            StatusMessage = ex.Message;
         }
         catch (Exception ex)
         {
             IsStatusError = true;
-            StatusMessage = ChatErrorMapper.ToUserMessage(ex) ?? "⚠️ 连接失败";
+            StatusMessage = ChatErrorMapper.ToUserMessage(ex) ?? Loc.Get("Mcp.ConnectFailed");
         }
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    // ---------------- 资源与提示浏览 ----------------
+
+    /// <summary>
+    /// 从表单构造一份服务器配置用于浏览。
+    /// 与"测试连接"不同，这里用真实 Id：浏览就是要连上这台服务器，
+    /// 复用已建立的连接既快又不会多起一个子进程。
+    /// </summary>
+    private McpServerConfig? BuildBrowsingConfig()
+    {
+        if (_editing is null)
+        {
+            return null;
+        }
+
+        return new McpServerConfig
+        {
+            Id = _editing.Id,
+            Name = Name.Trim(),
+            Transport = Transport,
+            Command = IsStdio ? Command.Trim() : null,
+            Args = IsStdio ? ParseLines(ArgumentsText) : [],
+            Url = IsHttpTransport ? Url.Trim() : null,
+            Headers = IsHttpTransport ? ParseHeaders(HeadersText) : [],
+            Enabled = true,
+        };
+    }
+
+    /// <summary>
+    /// 一次性读取工具、资源与提示模板。
+    /// 逐个卡片点三次太琐碎，而这三者的连接是复用的，一次读全反而更省事。
+    /// </summary>
+    [RelayCommand]
+    private async Task LoadAllAsync()
+    {
+        await LoadToolsAsync().ConfigureAwait(true);
+        await LoadResourcesAsync().ConfigureAwait(true);
+        await LoadPromptsAsync().ConfigureAwait(true);
+    }
+
+    [RelayCommand]
+    private async Task LoadToolsAsync()
+    {
+        if (_mcp is null)
+        {
+            return;
+        }
+
+        var config = BuildBrowsingConfig();
+        if (config is null)
+        {
+            IsStatusError = true;
+            StatusMessage = Loc.Get("Mcp.SaveBeforeTools");
+            return;
+        }
+
+        IsBrowsing = true;
+        Tools.Clear();
+        SelectedTool = null;
+        IsStatusError = false;
+        StatusMessage = Loc.Get("Mcp.ReadingTools");
+
+        try
+        {
+            foreach (var tool in await _mcp.GetToolsAsync(config).ConfigureAwait(true))
+            {
+                Tools.Add(new McpToolItemViewModel(tool));
+            }
+
+            IsStatusError = false;
+            StatusMessage = Tools.Count == 0
+                ? Loc.Get("Mcp.NoTools")
+                : Loc.Get("Mcp.ToolsFound", Tools.Count);
+        }
+        catch (Exception ex)
+        {
+            IsStatusError = true;
+            StatusMessage = ChatErrorMapper.ToUserMessage(ex) ?? Loc.Get("Mcp.ReadToolsFailed", ex.Message);
+        }
+        finally
+        {
+            IsBrowsing = false;
+            OnPropertyChanged(nameof(HasTools));
+        }
+    }
+
+    [RelayCommand]
+    private async Task LoadResourcesAsync()
+    {
+        if (_mcp is null)
+        {
+            return;
+        }
+
+        var config = BuildBrowsingConfig();
+        if (config is null)
+        {
+            IsStatusError = true;
+            StatusMessage = Loc.Get("Mcp.SaveBeforeResources");
+            return;
+        }
+
+        IsBrowsing = true;
+        Resources.Clear();
+        SelectedResource = null;
+        ResourceContentText = string.Empty;
+        IsStatusError = false;
+        StatusMessage = Loc.Get("Agent.ReadingResources");
+
+        try
+        {
+            foreach (var resource in await _mcp.GetResourcesAsync(config).ConfigureAwait(true))
+            {
+                Resources.Add(new McpResourceItemViewModel(resource));
+            }
+
+            IsStatusError = false;
+            StatusMessage = Resources.Count == 0
+                ? Loc.Get("Mcp.NoResources")
+                : Loc.Get("Agent.ResourcesFound", Resources.Count);
+        }
+        catch (Exception ex)
+        {
+            IsStatusError = true;
+            StatusMessage = ChatErrorMapper.ToUserMessage(ex) ?? Loc.Get("Mcp.ReadResourcesFailed", ex.Message);
+        }
+        finally
+        {
+            IsBrowsing = false;
+            OnPropertyChanged(nameof(HasResources));
+        }
+    }
+
+    [RelayCommand]
+    private async Task ReadSelectedResourceAsync()
+    {
+        if (_mcp is null || SelectedResource is null)
+        {
+            return;
+        }
+
+        var config = BuildBrowsingConfig();
+        if (config is null)
+        {
+            return;
+        }
+
+        IsBrowsing = true;
+        IsStatusError = false;
+        ResourceContentText = Loc.Get("Common.Reading");
+
+        try
+        {
+            var content = await _mcp
+                .ReadResourceAsync(config, SelectedResource.Uri)
+                .ConfigureAwait(true);
+
+            ResourceContentText = content.Text;
+            StatusMessage = Loc.Get("Mcp.ResourceRead", SelectedResource.Uri);
+        }
+        catch (Exception ex)
+        {
+            IsStatusError = true;
+            ResourceContentText = string.Empty;
+            StatusMessage = ChatErrorMapper.ToUserMessage(ex) ?? Loc.Get("Common.ReadFailed", ex.Message);
+        }
+        finally
+        {
+            IsBrowsing = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task LoadPromptsAsync()
+    {
+        if (_mcp is null)
+        {
+            return;
+        }
+
+        var config = BuildBrowsingConfig();
+        if (config is null)
+        {
+            IsStatusError = true;
+            StatusMessage = Loc.Get("Mcp.SaveBeforePrompts");
+            return;
+        }
+
+        IsBrowsing = true;
+        Prompts.Clear();
+        SelectedPrompt = null;
+        IsStatusError = false;
+        StatusMessage = Loc.Get("Mcp.ReadingPrompts");
+
+        try
+        {
+            foreach (var prompt in await _mcp.GetPromptsAsync(config).ConfigureAwait(true))
+            {
+                Prompts.Add(new McpPromptItemViewModel(prompt));
+            }
+
+            IsStatusError = false;
+            StatusMessage = Prompts.Count == 0
+                ? Loc.Get("Mcp.NoPrompts")
+                : Loc.Get("Mcp.PromptsFound", Prompts.Count);
+        }
+        catch (Exception ex)
+        {
+            IsStatusError = true;
+            StatusMessage = ChatErrorMapper.ToUserMessage(ex) ?? Loc.Get("Mcp.ReadPromptsFailed", ex.Message);
+        }
+        finally
+        {
+            IsBrowsing = false;
+            OnPropertyChanged(nameof(HasPrompts));
+        }
+    }
+
+    [RelayCommand]
+    private async Task GetSelectedPromptAsync()
+    {
+        if (_mcp is null || SelectedPrompt is null)
+        {
+            return;
+        }
+
+        var config = BuildBrowsingConfig();
+        if (config is null)
+        {
+            return;
+        }
+
+        IsBrowsing = true;
+        IsStatusError = false;
+        PromptResultText = Loc.Get("Mcp.Expanding");
+
+        try
+        {
+            var arguments = new Dictionary<string, string?>(StringComparer.Ordinal);
+            foreach (var argument in PromptArguments)
+            {
+                arguments[argument.Name] = argument.Value;
+            }
+
+            var messages = await _mcp
+                .GetPromptAsync(config, SelectedPrompt.Name, arguments)
+                .ConfigureAwait(true);
+
+            PromptResultText = string.Join(
+                Environment.NewLine + Environment.NewLine,
+                messages.Select(m => $"[{m.Role}] {m.Text}"));
+
+            StatusMessage = Loc.Get("Mcp.PromptExpanded", SelectedPrompt.DisplayName);
+        }
+        catch (Exception ex)
+        {
+            IsStatusError = true;
+            PromptResultText = string.Empty;
+            StatusMessage = ChatErrorMapper.ToUserMessage(ex) ?? Loc.Get("Mcp.ExpandFailed", ex.Message);
+        }
+        finally
+        {
+            IsBrowsing = false;
         }
     }
 
@@ -324,7 +855,7 @@ public sealed partial class McpServerConfigViewModel : ViewModelBase
         }
 
         await LoadAsync().ConfigureAwait(true);
-        _status.ReportSuccess("MCP 服务器已删除");
+        _status.ReportSuccess(Loc.Get("Mcp.Deleted"));
     }
 
     private static List<string> ParseLines(string text) =>

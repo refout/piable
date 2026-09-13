@@ -1,3 +1,4 @@
+using Piable.Helpers;
 using Piable.Models;
 
 namespace Piable.Services.Tools;
@@ -85,7 +86,7 @@ public sealed class ToolCatalog : IToolCatalog
         {
             if (!byId.TryGetValue(serverId, out var server))
             {
-                warnings.Add($"⚠️ 智能体关联的 MCP 服务器已不存在，已跳过");
+                warnings.Add(Loc.Get("Tool.CatalogMissingServer"));
                 continue;
             }
 
@@ -100,7 +101,7 @@ public sealed class ToolCatalog : IToolCatalog
             }
             catch (McpConnectionException ex)
             {
-                warnings.Add($"⚠️ {ex.Message}");
+                warnings.Add(ex.Message);
             }
             catch (OperationCanceledException)
             {
@@ -108,7 +109,7 @@ public sealed class ToolCatalog : IToolCatalog
             }
             catch (Exception ex)
             {
-                warnings.Add($"⚠️ MCP 服务器「{server.Name}」工具发现失败：{ex.Message}");
+                warnings.Add(Loc.Get("Tool.CatalogDiscoveryFailed", server.Name, ex.Message));
             }
         }
     }
@@ -130,7 +131,7 @@ public sealed class ToolCatalog : IToolCatalog
                 continue;
             }
 
-            warnings.Add($"⚠️ 工具名「{tool.Name}」重复（来自 {tool.SourceLabel}），已忽略后者");
+            warnings.Add(Loc.Get("Tool.CatalogDuplicate", tool.Name, tool.SourceLabel));
         }
 
         return result;

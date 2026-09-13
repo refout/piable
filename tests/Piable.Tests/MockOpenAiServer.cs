@@ -11,23 +11,31 @@ namespace Piable.Tests;
 /// （请求路径、鉴权头、流式分帧、usage 字段名）。只替换接口会把这些全部绕开，
 /// 测试通过也说明不了实际的对话流程可用。
 /// </summary>
+/// <remarks>
+/// 全进程只启动一个 <see cref="HttpListener"/>，每个实例用一个随机虚拟路径区分：
+/// <c>http://127.0.0.1:{port}/{route}/chat/completions</c>。
+///
+/// 不让每个实例各起一个监听器的原因：同一进程内多个 HttpListener 会互相串台——
+/// 发给 A 端口的请求可能被 B 接走（http.sys 的 URL 组按其内部映射表分发，
+/// 而 .NET 的 HttpListener 对同主机不同端口的登记并不隔离）。表现是测试收到
+/// 别的测试构造的回复，随机失败且极难定位。共用一个监听器后，路由由我们自己按路径做，
+/// 投递目标唯一确定。
+/// </remarks>
 internal sealed class MockOpenAiServer : IAsyncDisposable
 {
-    private readonly HttpListener _listener;
-    private readonly CancellationTokenSource _cts = new();
-    private readonly Task _acceptLoop;
+    private static readonly Lock SharedGate = new();
+    private static readonly Dictionary<string, MockOpenAiServer> Routes = new(StringComparer.Ordinal);
+    private static HttpListener? s_listener;
+    private static string? s_baseUrl;
+
+    private readonly string _route;
     private readonly List<string> _requestBodies = [];
     private readonly Lock _gate = new();
 
-    private MockOpenAiServer(HttpListener listener, string baseUrl)
-    {
-        _listener = listener;
-        BaseUrl = baseUrl;
-        _acceptLoop = Task.Run(AcceptLoopAsync);
-    }
+    private MockOpenAiServer(string route) => _route = route;
 
-    /// <summary>作为 ProviderConfig.Endpoint 使用的地址。</summary>
-    public string BaseUrl { get; }
+    /// <summary>作为 ProviderConfig.Endpoint 使用的地址，形如 http://127.0.0.1:{port}/{route}/。</summary>
+    public string BaseUrl => $"{s_baseUrl}/{_route}/";
 
     /// <summary>服务端会返回的 SSE 响应体。测试可替换为任意内容。</summary>
     public string SseBody { get; set; } = string.Empty;
@@ -56,7 +64,7 @@ internal sealed class MockOpenAiServer : IAsyncDisposable
     /// <summary>最近一次请求的 Authorization 头。</summary>
     public string? LastAuthorization { get; private set; }
 
-    /// <summary>最近一次请求的路径（含查询串）。</summary>
+    /// <summary>最近一次请求的路径（含查询串，已去掉本实例的虚拟路径前缀）。</summary>
     public string? LastPath { get; private set; }
 
     /// <summary>收到的全部请求体。</summary>
@@ -73,19 +81,59 @@ internal sealed class MockOpenAiServer : IAsyncDisposable
 
     public static MockOpenAiServer Start()
     {
-        // 端口 0 让系统分配空闲端口，避免并行测试相互抢占
-        var port = GetFreePort();
-        var prefix = $"http://127.0.0.1:{port}/";
+        EnsureListener();
 
-        var listener = new HttpListener();
-        listener.Prefixes.Add(prefix);
-        listener.Start();
+        var route = Guid.NewGuid().ToString("n");
+        var server = new MockOpenAiServer(route);
 
-        return new MockOpenAiServer(listener, prefix.TrimEnd('/'));
+        lock (SharedGate)
+        {
+            Routes[route] = server;
+        }
+
+        return server;
     }
 
-    private static int GetFreePort()
+    private static void EnsureListener()
     {
+        lock (SharedGate)
+        {
+            if (s_listener is not null)
+            {
+                return;
+            }
+
+            for (var attempt = 0; attempt < 20; attempt++)
+            {
+                var port = ReserveFreePort();
+                var prefix = $"http://127.0.0.1:{port}/";
+
+                var listener = new HttpListener();
+                listener.Prefixes.Add(prefix);
+
+                try
+                {
+                    listener.Start();
+                }
+                catch (HttpListenerException)
+                {
+                    listener.Close();
+                    continue;
+                }
+
+                s_listener = listener;
+                s_baseUrl = prefix.TrimEnd('/');
+                _ = Task.Run(() => AcceptLoopAsync(listener));
+                return;
+            }
+        }
+
+        throw new InvalidOperationException("无法为 mock 服务端找到可用端口");
+    }
+
+    private static int ReserveFreePort()
+    {
+        // 端口 0 让系统分配空闲端口，避免与机器上其他进程抢占
         var probe = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
         probe.Start();
         var port = ((IPEndPoint)probe.LocalEndpoint).Port;
@@ -93,36 +141,62 @@ internal sealed class MockOpenAiServer : IAsyncDisposable
         return port;
     }
 
-    private async Task AcceptLoopAsync()
+    private static async Task AcceptLoopAsync(HttpListener listener)
     {
-        while (!_cts.IsCancellationRequested)
+        while (true)
         {
             HttpListenerContext context;
             try
             {
-                context = await _listener.GetContextAsync().ConfigureAwait(false);
-            }
-            catch (Exception) when (_cts.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (HttpListenerException)
-            {
-                return;
-            }
-
-            try
-            {
-                await HandleAsync(context).ConfigureAwait(false);
+                context = await listener.GetContextAsync().ConfigureAwait(false);
             }
             catch (Exception)
             {
-                // 单个请求处理失败不应让监听循环退出
+                // 进程退出或监听被关闭
+                return;
             }
+
+            // 并行处理：串行会让多轮工具调用互相等待，测试直接超时
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await DispatchAsync(context).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // 单个请求处理失败不应让监听循环退出
+                }
+            });
         }
     }
 
-    private async Task HandleAsync(HttpListenerContext context)
+    private static async Task DispatchAsync(HttpListenerContext context)
+    {
+        var pathAndQuery = context.Request.Url?.PathAndQuery ?? "/";
+        var segments = pathAndQuery.TrimStart('/').Split('/');
+        var route = segments.Length > 0 ? segments[0] : string.Empty;
+
+        MockOpenAiServer? target;
+        lock (SharedGate)
+        {
+            Routes.TryGetValue(route, out target);
+        }
+
+        if (target is null)
+        {
+            // 对应的测试已经结束（服务端已释放），请求来晚了
+            context.Response.StatusCode = 404;
+            context.Response.Close();
+            return;
+        }
+
+        // 去掉虚拟路径段，让断言看到的仍是 "/chat/completions"
+        var relative = "/" + string.Join('/', segments.Skip(1));
+        await target.HandleAsync(context, relative).ConfigureAwait(false);
+    }
+
+    private async Task HandleAsync(HttpListenerContext context, string relativePath)
     {
         using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8);
         var body = await reader.ReadToEndAsync().ConfigureAwait(false);
@@ -133,7 +207,7 @@ internal sealed class MockOpenAiServer : IAsyncDisposable
         }
 
         LastAuthorization = context.Request.Headers["Authorization"];
-        LastPath = context.Request.Url?.PathAndQuery;
+        LastPath = relativePath;
 
         context.Response.StatusCode = StatusCode;
 
@@ -329,29 +403,13 @@ internal sealed class MockOpenAiServer : IAsyncDisposable
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        await _cts.CancelAsync().ConfigureAwait(false);
-
-        try
+        lock (SharedGate)
         {
-            _listener.Stop();
-            _listener.Close();
-        }
-        catch (ObjectDisposedException)
-        {
-            // 已关闭
+            Routes.Remove(_route);
         }
 
-        try
-        {
-            await _acceptLoop.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-            // 关闭过程中的异常无需关注
-        }
-
-        _cts.Dispose();
+        return ValueTask.CompletedTask;
     }
 }

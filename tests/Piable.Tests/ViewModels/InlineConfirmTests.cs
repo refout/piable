@@ -102,7 +102,7 @@ public class InlineConfirmTests
             },
             "通用助手");
 
-        Assert.Equal("💬 12条 · 🔢 2.3K tokens · 🤖 通用助手", item.SummaryText);
+        Assert.Equal("12条 · 2.3K tokens · 通用助手", item.SummaryText);
     }
 
     [Fact]
@@ -116,10 +116,11 @@ public class InlineConfirmTests
     }
 
     [Fact]
-    public void 默认智能体在名称前带星标()
+    public void 默认智能体在界面上用星标图标标记()
     {
         var agent = new AgentListItemViewModel(new Agent { Id = "a1", Name = "通用助手", IsDefault = true });
 
-        Assert.StartsWith("★", agent.DisplayName);
+        Assert.True(agent.IsDefault);
+        Assert.Equal("通用助手", agent.DisplayName);
     }
 }

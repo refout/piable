@@ -179,6 +179,123 @@ public class ToolLoopTests
         Assert.Contains("piable-tool-ran", record.ResultPayload);
     }
 
+    // ---------------- 危险工具逐次确认 ----------------
+
+    [Fact]
+    public async Task 逐次确认被拒绝时工具不执行且原因回填给模型()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.EnqueueResponse(MockOpenAiServer.BuildToolCallSse(
+            "run_shell", """{"command":"echo must-not-run"}"""));
+        server.SseBody = MockOpenAiServer.BuildSse(["那我不执行了。"]);
+
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+
+        var asked = new List<ToolConfirmationRequest>();
+        var request = RequestFor(h, allowDangerous: true) with
+        {
+            // 智能体已授权，但用户这一次不批准
+            ConfirmDangerousTool = (r, _) =>
+            {
+                asked.Add(r);
+                return Task.FromResult(false);
+            },
+        };
+
+        var (_, chunks) = await CollectAsync(h.Orchestrator, request);
+
+        Assert.Single(asked);
+        Assert.Equal("run_shell", asked[0].ToolName);
+        Assert.Contains("must-not-run", asked[0].ArgumentsText);
+
+        var record = chunks.Single(c => c.ToolCall is not null).ToolCall!;
+        Assert.Equal(ToolInvocationStatus.Declined, record.Status);
+        Assert.DoesNotContain("must-not-run", record.ResultPayload);
+
+        var secondRequest = JsonDocument.Parse(server.RequestBodies[1]).RootElement;
+        var toolMessage = secondRequest.GetProperty("messages").EnumerateArray()
+            .Single(m => m.GetProperty("role").GetString() == "tool");
+        Assert.Contains("拒绝", toolMessage.GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task 逐次确认批准时工具正常执行()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.EnqueueResponse(MockOpenAiServer.BuildToolCallSse(
+            "run_shell", """{"command":"echo approved-ran"}"""));
+        server.SseBody = MockOpenAiServer.BuildSse(["已执行。"]);
+
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+
+        var request = RequestFor(h, allowDangerous: true) with
+        {
+            ConfirmDangerousTool = (_, _) => Task.FromResult(true),
+        };
+
+        var (_, chunks) = await CollectAsync(h.Orchestrator, request);
+
+        var record = chunks.Single(c => c.ToolCall is not null).ToolCall!;
+        Assert.Equal(ToolInvocationStatus.Succeeded, record.Status);
+        Assert.Contains("approved-ran", record.ResultPayload);
+    }
+
+    [Fact]
+    public async Task 未授权时不再逐次询问_直接按策略拒绝()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.EnqueueResponse(MockOpenAiServer.BuildToolCallSse(
+            "run_shell", """{"command":"echo nope"}"""));
+        server.SseBody = MockOpenAiServer.BuildSse(["无法执行。"]);
+
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+
+        var asked = 0;
+        var request = RequestFor(h, allowDangerous: false) with
+        {
+            ConfirmDangerousTool = (_, _) =>
+            {
+                asked++;
+                return Task.FromResult(true);
+            },
+        };
+
+        var (_, chunks) = await CollectAsync(h.Orchestrator, request);
+
+        // 智能体层面就没授权，问用户没有意义
+        Assert.Equal(0, asked);
+        Assert.Equal(ToolInvocationStatus.Denied, chunks.Single(c => c.ToolCall is not null).ToolCall!.Status);
+    }
+
+    [Fact]
+    public async Task 安全工具不触发逐次确认()
+    {
+        await using var server = MockOpenAiServer.Start();
+        server.EnqueueResponse(MockOpenAiServer.BuildToolCallSse("current_datetime"));
+        server.SseBody = MockOpenAiServer.BuildSse(["现在是下午三点。"]);
+
+        var h = await CreateAsync(server);
+        await using var _ = h.Workspace;
+
+        var asked = 0;
+        var request = RequestFor(h, allowDangerous: false) with
+        {
+            ConfirmDangerousTool = (_, _) =>
+            {
+                asked++;
+                return Task.FromResult(false);
+            },
+        };
+
+        var (_, chunks) = await CollectAsync(h.Orchestrator, request);
+
+        Assert.Equal(0, asked);
+        Assert.Equal(ToolInvocationStatus.Succeeded, chunks.Single(c => c.ToolCall is not null).ToolCall!.Status);
+    }
+
     [Fact]
     public async Task 工具执行失败时错误被回填而不是中断对话()
     {

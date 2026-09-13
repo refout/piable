@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+using Piable.Helpers;
 using Piable.Models;
 
 namespace Piable.Services.Tools;
@@ -10,6 +12,29 @@ public interface IMcpClientService : IAsyncDisposable
 {
     /// <summary>获取某台服务器提供的工具。连接失败时抛出 <see cref="McpConnectionException"/>。</summary>
     Task<IReadOnlyList<ToolDescriptor>> GetToolsAsync(McpServerConfig config, CancellationToken ct = default);
+
+    /// <summary>
+    /// 获取某台服务器的资源与资源模板。
+    /// 服务器不支持 resources 能力时返回空列表，而不是抛异常——
+    /// 只提供工具的服务器是绝大多数，为"没有资源"让整台服务器不可用毫无道理。
+    /// </summary>
+    Task<IReadOnlyList<McpResourceDescriptor>> GetResourcesAsync(
+        McpServerConfig config, CancellationToken ct = default);
+
+    /// <summary>读取一个资源的内容。</summary>
+    Task<McpResourceContent> ReadResourceAsync(
+        McpServerConfig config, string uri, CancellationToken ct = default);
+
+    /// <summary>获取某台服务器的提示模板。不支持时返回空列表。</summary>
+    Task<IReadOnlyList<McpPromptDescriptor>> GetPromptsAsync(
+        McpServerConfig config, CancellationToken ct = default);
+
+    /// <summary>展开一个提示模板，得到它对应的消息序列。</summary>
+    Task<IReadOnlyList<McpPromptMessage>> GetPromptAsync(
+        McpServerConfig config,
+        string promptName,
+        IReadOnlyDictionary<string, string?>? arguments = null,
+        CancellationToken ct = default);
 
     /// <summary>断开连接并清除缓存。配置变更后调用，下次使用时重新连接。</summary>
     Task InvalidateAsync(string serverId);
@@ -55,6 +80,141 @@ public sealed class McpClientService : IMcpClientService
 
         var connection = await GetOrConnectAsync(config, ct).ConfigureAwait(false);
         return connection.Tools;
+    }
+
+    public async Task<IReadOnlyList<McpResourceDescriptor>> GetResourcesAsync(
+        McpServerConfig config, CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(config);
+
+        var connection = await GetOrConnectAsync(config, ct).ConfigureAwait(false);
+        return connection.Resources;
+    }
+
+    public async Task<McpResourceContent> ReadResourceAsync(
+        McpServerConfig config, string uri, CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(config);
+
+        if (string.IsNullOrWhiteSpace(uri))
+        {
+            throw new McpConnectionException(Loc.Get("Mcp.NoResourceUri"));
+        }
+
+        var connection = await GetOrConnectAsync(config, ct).ConfigureAwait(false);
+
+        try
+        {
+            var result = await connection.Client
+                .ReadResourceAsync(uri, cancellationToken: ct)
+                .ConfigureAwait(false);
+
+            return ToContent(uri, result);
+        }
+        catch (Exception ex) when (ex is not McpConnectionException)
+        {
+            throw new McpConnectionException(Loc.Get("Mcp.ReadResourceFailed", ex.Message), ex);
+        }
+    }
+
+    public async Task<IReadOnlyList<McpPromptDescriptor>> GetPromptsAsync(
+        McpServerConfig config, CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(config);
+
+        var connection = await GetOrConnectAsync(config, ct).ConfigureAwait(false);
+        return connection.Prompts;
+    }
+
+    public async Task<IReadOnlyList<McpPromptMessage>> GetPromptAsync(
+        McpServerConfig config,
+        string promptName,
+        IReadOnlyDictionary<string, string?>? arguments = null,
+        CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(config);
+
+        var connection = await GetOrConnectAsync(config, ct).ConfigureAwait(false);
+
+        var args = new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (arguments is not null)
+        {
+            foreach (var (key, value) in arguments)
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    args[key] = value;
+                }
+            }
+        }
+
+        try
+        {
+            var result = await connection.Client
+                .GetPromptAsync(promptName, args, cancellationToken: ct)
+                .ConfigureAwait(false);
+
+            return result.Messages
+                .Select(m => new McpPromptMessage
+                {
+                    // 协议里的角色是小写（"user"/"assistant"），枚举名是 PascalCase，转回小写更符合原义
+                    Role = m.Role.ToString().ToLowerInvariant(),
+
+                    // 提示消息的内容块可能是图片、资源等，只有文本块能直接显示
+                    Text = m.Content is TextContentBlock text
+                        ? text.Text ?? string.Empty
+                        : Loc.Get("Mcp.NonTextContent", m.Content.Type),
+                })
+                .ToList();
+        }
+        catch (Exception ex) when (ex is not McpConnectionException)
+        {
+            throw new McpConnectionException(Loc.Get("Mcp.GetPromptFailed", promptName, ex.Message), ex);
+        }
+    }
+
+    /// <summary>
+    /// 把读取结果摊平成本应用的资源内容。
+    /// 一个 URI 可能返回多段内容，这里按段拼接；二进制段给出说明而非 base64。
+    /// </summary>
+    private static McpResourceContent ToContent(string uri, ReadResourceResult result)
+    {
+        var builder = new System.Text.StringBuilder();
+        var isBinary = false;
+
+        foreach (var item in result.Contents)
+        {
+            if (item is TextResourceContents text)
+            {
+                if (builder.Length > 0)
+                {
+                    builder.AppendLine();
+                }
+
+                builder.Append(text.Text);
+                continue;
+            }
+
+            isBinary = true;
+            if (builder.Length > 0)
+            {
+                builder.AppendLine();
+            }
+
+            builder.Append(Loc.Get("Mcp.BinaryOmitted", item.MimeType ?? Loc.Get("Common.Unknown")));
+        }
+
+        return new McpResourceContent
+        {
+            Uri = uri,
+            MimeType = result.Contents.Count > 0 ? result.Contents[0].MimeType : null,
+            Text = builder.Length == 0 ? Loc.Get("Mcp.EmptyResource") : builder.ToString(),
+            IsBinary = isBinary,
+        };
     }
 
     public async Task InvalidateAsync(string serverId)
@@ -150,20 +310,116 @@ public sealed class McpClientService : IMcpClientService
                 .Select(tool => ToDescriptor(tool, config, prefix))
                 .ToList();
 
-            return new ServerConnection(client, tools);
+            // 资源与提示是可选能力：连不上、没实现、报个错都不该影响工具的使用，
+            // 因此这里只尽力而为，失败就当作这台服务器没有提供。
+            var resources = await TryListResourcesAsync(client, config, timeoutCts.Token)
+                .ConfigureAwait(false);
+            var prompts = await TryListPromptsAsync(client, config, timeoutCts.Token)
+                .ConfigureAwait(false);
+
+            return new ServerConnection(client, tools, resources, prompts);
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
         {
             await SafeDisposeAsync(client).ConfigureAwait(false);
             throw new McpConnectionException(
-                $"连接 MCP 服务器「{config.Name}」超时（超过 {ConnectTimeout.TotalSeconds:0} 秒）。");
+                Loc.Get("Mcp.ConnectTimeout", config.Name, ConnectTimeout.TotalSeconds));
         }
         catch (Exception ex)
         {
             await SafeDisposeAsync(client).ConfigureAwait(false);
             throw new McpConnectionException(
-                $"连接 MCP 服务器「{config.Name}」失败：{ex.Message}", ex);
+                Loc.Get("Mcp.ConnectFailedDetail", config.Name, ex.Message), ex);
         }
+    }
+
+    private static async Task<List<McpResourceDescriptor>> TryListResourcesAsync(
+        McpClient client, McpServerConfig config, CancellationToken ct)
+    {
+        var result = new List<McpResourceDescriptor>();
+
+        try
+        {
+            foreach (var resource in await client.ListResourcesAsync(cancellationToken: ct)
+                         .ConfigureAwait(false))
+            {
+                result.Add(new McpResourceDescriptor
+                {
+                    ServerId = config.Id,
+                    ServerName = config.Name,
+                    Uri = resource.Uri,
+                    Name = resource.Name,
+                    Title = resource.Title,
+                    Description = resource.Description,
+                    MimeType = resource.MimeType,
+                });
+            }
+        }
+        catch (Exception)
+        {
+            // 服务器未声明 resources 能力，或实现有瑕疵
+        }
+
+        try
+        {
+            foreach (var template in await client.ListResourceTemplatesAsync(cancellationToken: ct)
+                         .ConfigureAwait(false))
+            {
+                result.Add(new McpResourceDescriptor
+                {
+                    ServerId = config.Id,
+                    ServerName = config.Name,
+                    Uri = template.UriTemplate,
+                    Name = template.Name,
+                    Title = template.Title,
+                    Description = template.Description,
+                    MimeType = template.MimeType,
+                    IsTemplate = true,
+                });
+            }
+        }
+        catch (Exception)
+        {
+            // 同上
+        }
+
+        return result;
+    }
+
+    private static async Task<List<McpPromptDescriptor>> TryListPromptsAsync(
+        McpClient client, McpServerConfig config, CancellationToken ct)
+    {
+        var result = new List<McpPromptDescriptor>();
+
+        try
+        {
+            foreach (var prompt in await client.ListPromptsAsync(cancellationToken: ct)
+                         .ConfigureAwait(false))
+            {
+                result.Add(new McpPromptDescriptor
+                {
+                    ServerId = config.Id,
+                    ServerName = config.Name,
+                    Name = prompt.Name,
+                    Title = prompt.Title,
+                    Description = prompt.Description,
+                    Arguments = (prompt.ProtocolPrompt.Arguments ?? [])
+                        .Select(a => new McpPromptArgumentDescriptor
+                        {
+                            Name = a.Name,
+                            Description = a.Description,
+                            Required = a.Required == true,
+                        })
+                        .ToList(),
+                });
+            }
+        }
+        catch (Exception)
+        {
+            // 服务器未声明 prompts 能力
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -197,7 +453,7 @@ public sealed class McpClientService : IMcpClientService
             {
                 Name = config.Name,
                 Command = string.IsNullOrWhiteSpace(config.Command)
-                    ? throw new McpConnectionException($"MCP 服务器「{config.Name}」未配置启动命令。")
+                    ? throw new McpConnectionException(Loc.Get("Mcp.NoCommand", config.Name))
                     : config.Command,
                 Arguments = [.. config.Args],
                 ShutdownTimeout = ShutdownTimeout,
@@ -213,7 +469,7 @@ public sealed class McpClientService : IMcpClientService
     {
         if (string.IsNullOrWhiteSpace(config.Url) || !Uri.TryCreate(config.Url, UriKind.Absolute, out var endpoint))
         {
-            throw new McpConnectionException($"MCP 服务器「{config.Name}」的 URL 无效：{config.Url}");
+            throw new McpConnectionException(Loc.Get("Mcp.InvalidUrl", config.Name, config.Url));
         }
 
         return new HttpClientTransport(
@@ -245,19 +501,29 @@ public sealed class McpClientService : IMcpClientService
         }
     }
 
-    /// <summary>一台已连接服务器及其工具清单。</summary>
-    private sealed class ServerConnection(McpClient client, IReadOnlyList<ToolDescriptor> tools)
+    /// <summary>一台已连接服务器及其工具、资源、提示清单。</summary>
+    private sealed class ServerConnection(
+        McpClient client,
+        IReadOnlyList<ToolDescriptor> tools,
+        IReadOnlyList<McpResourceDescriptor> resources,
+        IReadOnlyList<McpPromptDescriptor> prompts)
         : IAsyncDisposable
     {
+        public McpClient Client { get; } = client;
+
         public IReadOnlyList<ToolDescriptor> Tools { get; } = tools;
 
-        public bool IsAlive => !client.Completion.IsCompleted;
+        public IReadOnlyList<McpResourceDescriptor> Resources { get; } = resources;
+
+        public IReadOnlyList<McpPromptDescriptor> Prompts { get; } = prompts;
+
+        public bool IsAlive => !Client.Completion.IsCompleted;
 
         public async ValueTask DisposeAsync()
         {
             try
             {
-                await client.DisposeAsync().ConfigureAwait(false);
+                await Client.DisposeAsync().ConfigureAwait(false);
             }
             catch (Exception)
             {

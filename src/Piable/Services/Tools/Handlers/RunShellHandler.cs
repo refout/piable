@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Piable.Helpers;
 using Piable.Models;
 
 namespace Piable.Services.Tools.Handlers;
@@ -23,25 +24,24 @@ public sealed class RunShellHandler : ISkillHandler
 
     public string Key => "run_shell";
 
-    public string DisplayName => "执行命令";
+    public string DisplayName => Loc.Get("Skill.RunShell.Name");
 
     public ToolRisk Risk => ToolRisk.Dangerous;
 
-    public string SuggestedDescription =>
-        "在本机执行一条 shell 命令，返回退出码与输出。"
-        + "适用于运行构建、测试、查看文件等操作。命令以当前用户身份执行，请谨慎使用。";
+    public string SuggestedDescription => Loc.Get("Skill.RunShell.Description");
 
-    public string SuggestedToolSpec => """
+    // 用 $$ 让 raw string 里的 {{ }} 成为插值占位：JSON 的花括号不再需要转义
+    public string SuggestedToolSpec => $$"""
         {
           "type": "object",
           "properties": {
             "command": {
               "type": "string",
-              "description": "要执行的命令。Windows 下由 cmd.exe /c 执行，其他平台由 /bin/sh -c 执行。"
+              "description": "{{Loc.Get("Skill.RunShell.SpecCommand")}}"
             },
             "timeout_seconds": {
               "type": "integer",
-              "description": "超时秒数，默认 30，最大 300。"
+              "description": "{{Loc.Get("Skill.RunShell.SpecTimeout")}}"
             }
           },
           "required": ["command"]
@@ -54,7 +54,7 @@ public sealed class RunShellHandler : ISkillHandler
         var command = ReadString(arguments, "command");
         if (string.IsNullOrWhiteSpace(command))
         {
-            throw new SkillExecutionException("缺少必填参数 command。");
+            throw new SkillExecutionException(Loc.Get("Skill.RunShell.MissingCommand"));
         }
 
         var timeout = TimeSpan.FromSeconds(
@@ -93,7 +93,7 @@ public sealed class RunShellHandler : ISkillHandler
         }
         catch (Exception ex)
         {
-            throw new SkillExecutionException($"无法启动命令：{ex.Message}", ex);
+            throw new SkillExecutionException(Loc.Get("Skill.RunShell.StartFailed", ex.Message), ex);
         }
 
         // 必须并发读取两个流：只读其一会让另一个的缓冲区写满，进程随之阻塞
@@ -116,7 +116,7 @@ public sealed class RunShellHandler : ISkillHandler
         {
             KillQuietly(process);
             throw new SkillExecutionException(
-                $"命令超时（超过 {timeout.TotalSeconds:0} 秒）已被终止。");
+                Loc.Get("Skill.RunShell.Timeout", timeout.TotalSeconds));
         }
 
         var stdout = await stdoutTask.ConfigureAwait(false);
@@ -144,23 +144,23 @@ public sealed class RunShellHandler : ISkillHandler
     private static string Format(int exitCode, string stdout, string stderr)
     {
         var builder = new StringBuilder();
-        builder.Append("退出码：").Append(exitCode).AppendLine();
+        builder.Append(Loc.Get("Skill.RunShell.ExitCode")).Append(exitCode).AppendLine();
 
         if (!string.IsNullOrWhiteSpace(stdout))
         {
-            builder.AppendLine("标准输出：");
+            builder.AppendLine(Loc.Get("Skill.RunShell.Stdout"));
             builder.AppendLine(Truncate(stdout));
         }
 
         if (!string.IsNullOrWhiteSpace(stderr))
         {
-            builder.AppendLine("标准错误：");
+            builder.AppendLine(Loc.Get("Skill.RunShell.Stderr"));
             builder.AppendLine(Truncate(stderr));
         }
 
         if (string.IsNullOrWhiteSpace(stdout) && string.IsNullOrWhiteSpace(stderr))
         {
-            builder.AppendLine("（无输出）");
+            builder.AppendLine(Loc.Get("Skill.RunShell.NoOutput"));
         }
 
         return builder.ToString().TrimEnd();
@@ -171,7 +171,7 @@ public sealed class RunShellHandler : ISkillHandler
         var trimmed = text.TrimEnd();
         return trimmed.Length <= MaxOutputChars
             ? trimmed
-            : trimmed[..MaxOutputChars] + $"\n…（输出过长，已截断 {trimmed.Length - MaxOutputChars} 字符）";
+            : trimmed[..MaxOutputChars] + Loc.Get("Skill.RunShell.Truncated", trimmed.Length - MaxOutputChars);
     }
 
     /// <summary>

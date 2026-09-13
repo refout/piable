@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Piable.Helpers;
 using Piable.Models;
 using Piable.Services.Tools;
 
@@ -18,7 +19,7 @@ public sealed partial class SkillListItemViewModel : InlineConfirmViewModel
         _isEnabled = skill.Enabled;
         Risk = handler?.Risk ?? ToolRisk.Dangerous;
         HandlerKey = handler?.Key ?? skill.Handler;
-        HandlerDisplayName = handler?.DisplayName ?? $"未知处理器（{skill.Handler}）";
+        HandlerDisplayName = handler?.DisplayName ?? Loc.Get("Skill.UnknownHandler", skill.Handler);
     }
 
     public string Id { get; }
@@ -41,10 +42,10 @@ public sealed partial class SkillListItemViewModel : InlineConfirmViewModel
     [ObservableProperty]
     private bool _isEnabled;
 
-    /// <summary>行标题：<c>⚠️ 执行命令（run_shell）</c>。</summary>
-    public string DisplayName => $"{(IsDangerous ? "⚠️" : "✅")} {Name}（{ToolName}）";
+    /// <summary>行标题：<c>执行命令（run_shell）</c>。危险性由界面图标（Warning/Checkmark）表达。</summary>
+    public string DisplayName => $"{Name}（{ToolName}）";
 
-    public string Subtitle => IsEnabled ? HandlerDisplayName : $"{HandlerDisplayName} · 已停用";
+    public string Subtitle => IsEnabled ? HandlerDisplayName : Loc.Get("Skill.DisabledSubtitle", HandlerDisplayName);
 
     public void Update(SkillDefinition skill)
     {

@@ -29,16 +29,17 @@ public sealed partial class ToolCallViewModel : ChatItemViewModel
 
     public bool IsDenied => Payload.Status == ToolInvocationStatusPayload.Denied;
 
-    /// <summary>状态图标。被拒绝用禁止符，与执行失败区分开。</summary>
-    public string StatusIcon => Payload.Status switch
-    {
-        ToolInvocationStatusPayload.Succeeded => "🔧",
-        ToolInvocationStatusPayload.Denied => "⛔",
-        _ => "⚠️",
-    };
+    /// <summary>被用户拒绝（区别于被策略拒绝）：这是用户当时点出来的，值得单独标出来。</summary>
+    public bool IsDeclined => Payload.Status == ToolInvocationStatusPayload.Declined;
 
-    /// <summary>一行摘要：<c>🔧 run_shell(command=ls -la)</c>。</summary>
-    public string Summary => $"{StatusIcon} {Payload.DisplayName}（{ArgumentsText}）";
+    // 状态不再用 emoji 字符表示：界面按下面这几个标志选对应的矢量图标，
+    // 单色、跟随主题色，也不会因为字体缺失变成方框。
+    public bool IsSucceeded => Payload.Status == ToolInvocationStatusPayload.Succeeded;
+
+    public bool IsFailed => Payload.Status == ToolInvocationStatusPayload.Failed;
+
+    /// <summary>一行摘要：<c>run_shell(command=ls -la)</c>。状态由图标表达，不写进文字里。</summary>
+    public string Summary => $"{Payload.DisplayName}（{ArgumentsText}）";
 
     public string DurationText => Payload.DurationMs <= 0
         ? string.Empty
@@ -63,6 +64,7 @@ public sealed partial class ToolCallViewModel : ChatItemViewModel
         Status = record.Status switch
         {
             Services.ToolInvocationStatus.Denied => ToolInvocationStatusPayload.Denied,
+            Services.ToolInvocationStatus.Declined => ToolInvocationStatusPayload.Declined,
             Services.ToolInvocationStatus.Failed => ToolInvocationStatusPayload.Failed,
             _ => ToolInvocationStatusPayload.Succeeded,
         },

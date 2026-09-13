@@ -27,16 +27,26 @@ public class ToolCallViewModelTests
     {
         var vm = new ToolCallViewModel(Payload());
 
-        Assert.Equal("🔧 执行命令（command=ls -la）", vm.Summary);
+        Assert.Equal("执行命令（command=ls -la）", vm.Summary);
     }
 
     [Theory]
-    [InlineData(ToolInvocationStatusPayload.Succeeded, "🔧")]
-    [InlineData(ToolInvocationStatusPayload.Denied, "⛔")]
-    [InlineData(ToolInvocationStatusPayload.Failed, "⚠️")]
-    public void 不同结局用不同图标区分(ToolInvocationStatusPayload status, string icon)
+    [InlineData(ToolInvocationStatusPayload.Succeeded, true, false, false, false)]
+    [InlineData(ToolInvocationStatusPayload.Denied, false, true, false, false)]
+    [InlineData(ToolInvocationStatusPayload.Declined, false, false, true, false)]
+    [InlineData(ToolInvocationStatusPayload.Failed, false, false, false, true)]
+    public void 不同结局用不同状态标志区分(
+        ToolInvocationStatusPayload status,
+        bool succeeded, bool denied, bool declined, bool failed)
     {
-        Assert.StartsWith(icon, new ToolCallViewModel(Payload(status: status)).Summary);
+        var vm = new ToolCallViewModel(Payload(status: status));
+
+        Assert.Equal(succeeded, vm.IsSucceeded);
+        Assert.Equal(denied, vm.IsDenied);
+        Assert.Equal(declined, vm.IsDeclined);
+        Assert.Equal(failed, vm.IsFailed);
+        // 文字摘要不再带 emoji，状态由界面矢量图标表达
+        Assert.Equal("执行命令（command=ls -la）", vm.Summary);
     }
 
     [Fact]
